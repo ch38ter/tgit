@@ -419,7 +419,7 @@ func (m *model) renderHeader() string {
 // renderMiddle renders the file change list.
 func (m *model) renderMiddle() string {
 	if len(m.changes) == 0 {
-		return "no changes"
+		return ""
 	}
 
 	var lines []string
