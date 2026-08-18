@@ -5,26 +5,23 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"sync"
 )
 
-var (
-	repoRoot     string
-	repoRootOnce sync.Once
-	repoRootErr  error
-)
-
+// resolveRepoRoot resolves the git repository root on every call.
+// No caching: tests use os.Chdir() to temp dirs, and caching would stale.
 func resolveRepoRoot() (string, error) {
-	repoRootOnce.Do(func() {
-		cmd := exec.Command("git", "rev-parse", "--show-toplevel")
-		out, err := cmd.Output()
-		if err != nil {
-			repoRootErr = fmt.Errorf("not a git repository: %w", err)
-			return
-		}
-		repoRoot = strings.TrimSpace(string(out))
-	})
-	return repoRoot, repoRootErr
+	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("not a git repository: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// IsGitRepo checks if the current working directory is inside a git repository.
+func IsGitRepo() bool {
+	cmd := exec.Command("git", "rev-parse", "--git-dir")
+	return cmd.Run() == nil
 }
 
 // RunGit executes a git command with the repo root as cwd and

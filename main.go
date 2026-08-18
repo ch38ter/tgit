@@ -1,7 +1,17 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"os"
+
+	"github.com/charmbracelet/bubbletea"
+	"tgit/internal/ui"
+)
 
 func main() {
-	fmt.Println("tgit")
+	p := tea.NewProgram(ui.InitialModel())
+	if _, err := p.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 }
