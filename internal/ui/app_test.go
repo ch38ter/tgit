@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"tgit/internal/git"
 )
 
@@ -149,6 +150,26 @@ func TestPaneViewportWindow(t *testing.T) {
 	lines := strings.Split(v, "\n")
 	if len(lines) != 24 {
 		t.Fatalf("viewport window must keep 24 rows, got %d", len(lines))
+	}
+}
+
+func TestDiffViewNoLineOverflow(t *testing.T) {
+	m := InitialModel()
+	m.width, m.height = 80, 24
+	long := strings.Repeat("x", 500)
+	m.diffTitle = "very/long/path/" + long + ".go"
+	m.diffViewport.SetContent(long + "\n" + long)
+	m.currentView = "diff"
+	model, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	v := model.View()
+	lines := strings.Split(v, "\n")
+	if len(lines) != 24 {
+		t.Fatalf("diff view must keep 24 rows, got %d", len(lines))
+	}
+	for i, l := range lines {
+		if w := lipgloss.Width(l); w > 80 {
+			t.Fatalf("line %d width %d exceeds terminal width 80: %q", i, w, l)
+		}
 	}
 }
 

@@ -271,7 +271,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "q", "ctrl+c":
 			if m.currentView == "diff" {
 				m.currentView = "files"
-				return m, nil
+				return m, tea.ClearScreen
 			}
 			if m.watcher != nil {
 				m.watcher.Close()
@@ -369,9 +369,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.diffContent = diff
 					m.diffTitle = fc.Path
 					m.diffViewport.YOffset = 0
-					m.diffViewport.SetContent(diff)
+					m.diffViewport.SetContent(sanitizeTabs(diff))
 					m.currentView = "diff"
-					return m, nil
+					return m, tea.ClearScreen
 				}
 			case focusCommits:
 				if len(m.commits) > 0 && m.selectedCommit >= 0 && m.selectedCommit < len(m.commits) {
@@ -383,15 +383,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.diffContent = diff
 					m.diffTitle = commit.Hash
 					m.diffViewport.YOffset = 0
-					m.diffViewport.SetContent(diff)
+					m.diffViewport.SetContent(sanitizeTabs(diff))
 					m.currentView = "diff"
-					return m, nil
+					return m, tea.ClearScreen
 				}
 			}
 		case "esc":
 			if m.currentView == "diff" {
 				m.currentView = "files"
-				return m, nil
+				return m, tea.ClearScreen
 			}
 		}
 	case tea.MouseMsg:
@@ -611,7 +611,12 @@ func (m *model) renderFileLine(fc git.FileChange) string {
 
 // renderDiff renders the diff view with title line and viewport.
 func (m *model) renderDiff(middleHeight int) string {
-	vpWidth := m.width - 2
+	// Content box inside the bordered, padded pane: terminal width minus the
+	// outer 2-column trim minus border (2) and padding (2). Clamping every
+	// rendered line to this width prevents terminal line-wrapping, which would
+	// push rows out of sync with bubbletea's renderer and leave stale
+	// characters on screen when switching back to the files view.
+	vpWidth := m.width - 6
 	vpHeight := middleHeight - 3 // account for borders and title line
 	if vpWidth < 1 {
 		vpWidth = 1
@@ -622,10 +627,18 @@ func (m *model) renderDiff(middleHeight int) string {
 	m.diffViewport.Width = vpWidth
 	m.diffViewport.Height = vpHeight
 
-	title := diffTitleStyle.Render(m.diffTitle)
+	title := truncate.StringWithTail(diffTitleStyle.Render(m.diffTitle), uint(vpWidth), "...")
 	content := m.diffViewport.View()
 
 	return lipgloss.JoinVertical(lipgloss.Left, title, content)
+}
+
+// sanitizeTabs replaces tabs with spaces so a terminal never expands a tab
+// beyond the width lipgloss assumed (lipgloss counts a tab as a single cell,
+// but terminals render it as up to 8 columns), which would wrap lines and
+// leave residue on screen.
+func sanitizeTabs(s string) string {
+	return strings.ReplaceAll(s, "\t", "    ")
 }
 
 // statusStyle returns the lipgloss style for a given status byte.
