@@ -72,9 +72,11 @@ func parseLine(line string) (CommitRow, bool) {
 		return CommitRow{}, false
 	}
 
-	// Extract hash: up to 7 hex characters.
+	// Extract hash: all consecutive hex characters. The abbreviated length is
+	// NOT fixed at 7 — git auto-lengthens it as the repository grows, so a
+	// large repo can emit 9+ chars. The hash is always followed by a space.
 	hashLen := 0
-	for hashLen < len(rest) && hashLen < 7 && isHexChar(rest[hashLen]) {
+	for hashLen < len(rest) && hashLen < 64 && isHexChar(rest[hashLen]) {
 		hashLen++
 	}
 

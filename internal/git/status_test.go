@@ -386,6 +386,70 @@ func TestParseStatus_MixedScenario(t *testing.T) {
 	}
 }
 
+func TestUnquoteGitPath(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{"plain.txt", "plain.txt"},
+		{`"中文文件.md"`, "中文文件.md"},
+		{`"dir/中文 文件.md"`, "dir/中文 文件.md"},
+		{`"has\\backslash.txt"`, `has\backslash.txt`},
+		{`"has\"quote.txt"`, `has"quote.txt`},
+		{`"tab\there.txt"`, "tab\there.txt"},
+		{"", ""},
+		{`"only"`, "only"},
+	}
+	for _, tt := range tests {
+		if got := unquoteGitPath(tt.in); got != tt.want {
+			t.Errorf("unquoteGitPath(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestParseStatus_QuotedPath(t *testing.T) {
+	dir := initGitRepo(t)
+
+	// Commit a base so the branch is born, then create a Chinese-named file.
+	if err := os.WriteFile(filepath.Join(dir, "base.txt"), []byte("x"), 0644); err != nil {
+		t.Fatalf("write file failed: %v", err)
+	}
+	cmd := exec.Command("git", "add", "base.txt")
+	cmd.Dir = dir
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("git add failed: %v", err)
+	}
+	cmd = exec.Command("git", "commit", "-m", "init")
+	cmd.Dir = dir
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("git commit failed: %v", err)
+	}
+
+	name := "中文文件.md"
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("hello"), 0644); err != nil {
+		t.Fatalf("write file failed: %v", err)
+	}
+
+	raw := gitStatus(t, dir)
+	_, changes, err := ParseStatus(raw)
+	if err != nil {
+		t.Fatalf("ParseStatus failed: %v", err)
+	}
+
+	found := false
+	for _, c := range changes {
+		if c.Path == name {
+			found = true
+			if c.Status != 'U' {
+				t.Errorf("expected status U for %q, got %c", name, c.Status)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("quoted path %q not found in changes: %+v", name, changes)
+	}
+}
+
 func TestParseStatus_BranchName(t *testing.T) {
 	dir := initGitRepo(t)
 

@@ -56,13 +56,13 @@ func TestLogGraph_MultiBranchWithMerge(t *testing.T) {
 		t.Fatalf("expected >= 6 rows, got %d", len(rows))
 	}
 
-	// Verify each row has a non-empty 7-hex-char hash.
+	// Verify each row has a non-empty hex hash (length varies with repo size).
 	for i, row := range rows {
 		if row.Hash == "" {
 			t.Errorf("row %d: hash is empty", i)
 		}
-		if len(row.Hash) != 7 {
-			t.Errorf("row %d: hash length = %d, want 7 (hash=%q)", i, len(row.Hash), row.Hash)
+		if len(row.Hash) < 7 {
+			t.Errorf("row %d: hash length = %d, want >= 7 (hash=%q)", i, len(row.Hash), row.Hash)
 		}
 		for _, c := range row.Hash {
 			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
@@ -159,6 +159,38 @@ func TestLogGraph_DefaultMax(t *testing.T) {
 
 	if len(rows) != 1 {
 		t.Fatalf("expected 1 row, got %d", len(rows))
+	}
+}
+
+func TestLogGraph_LongAbbreviatedHash(t *testing.T) {
+	dir := t.TempDir()
+	gitRun(t, dir, "init", "-b", "main")
+	gitRun(t, dir, "config", "user.email", "test@example.com")
+	gitRun(t, dir, "config", "user.name", "Test")
+	// Force a long abbreviation, like large repos emit automatically.
+	gitRun(t, dir, "config", "core.abbrev", "12")
+
+	writeFile(t, dir, "file.txt", "content")
+	gitRun(t, dir, "add", ".")
+	gitRun(t, dir, "commit", "-m", "commit with a real message")
+
+	rows, err := LogGraphAt(dir, 200)
+	if err != nil {
+		t.Fatalf("LogGraphAt error: %v", err)
+	}
+
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(rows))
+	}
+
+	if len(rows[0].Hash) != 12 {
+		t.Errorf("expected 12-char hash, got %q (len %d)", rows[0].Hash, len(rows[0].Hash))
+	}
+	if rows[0].Msg != "commit with a real message" {
+		t.Errorf("expected message to survive long-hash parsing, got %q", rows[0].Msg)
+	}
+	if !strings.Contains(rows[0].Refs, "HEAD -> main") {
+		t.Errorf("expected refs to survive long-hash parsing, got %q", rows[0].Refs)
 	}
 }
 

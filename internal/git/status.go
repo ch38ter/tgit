@@ -40,7 +40,7 @@ func ParseStatus(raw string) (Branch string, Changes []FileChange, err error) {
 		// Untracked files: "? <path>"
 		if strings.HasPrefix(line, "? ") {
 			Changes = append(Changes, FileChange{
-				Path:   strings.TrimPrefix(line, "? "),
+				Path:   unquoteGitPath(strings.TrimPrefix(line, "? ")),
 				Status: 'U',
 				Staged: false,
 			})
@@ -90,7 +90,7 @@ func parseOrdinaryEntry(line string) (FileChange, bool) {
 	y := xy[1]
 
 	return FileChange{
-		Path:   fields[8],
+		Path:   unquoteGitPath(fields[8]),
 		Status: statusFromXY(x, y),
 		Staged: stagedFromXY(x, y),
 	}, true
@@ -111,15 +111,69 @@ func parseRenamedEntry(line string) (FileChange, bool) {
 	x := xy[0]
 	y := xy[1]
 
-	// path and origPath are separated by tab
+// path and origPath are separated by tab
 	pathParts := strings.SplitN(fields[9], "\t", 2)
-	path := pathParts[0]
 
 	return FileChange{
-		Path:   path,
+		Path:   unquoteGitPath(pathParts[0]),
 		Status: statusFromXY(x, y),
 		Staged: stagedFromXY(x, y),
 	}, true
+}
+
+// unquoteGitPath decodes a path quoted by git's quote.c (C-style escapes in
+// double quotes, used when a path contains non-ASCII or special characters)
+// back to the raw path. Paths without surrounding quotes are returned as-is.
+func unquoteGitPath(s string) string {
+	if len(s) < 2 || s[0] != '"' || s[len(s)-1] != '"' {
+		return s
+	}
+
+	var b []byte
+	for i := 1; i < len(s)-1; i++ {
+		c := s[i]
+		if c != '\\' {
+			b = append(b, c)
+			continue
+		}
+
+		i++
+		if i >= len(s)-1 {
+			break
+		}
+		switch s[i] {
+		case 'a':
+			b = append(b, 7)
+		case 'b':
+			b = append(b, 8)
+		case 't':
+			b = append(b, '\t')
+		case 'n':
+			b = append(b, '\n')
+		case 'v':
+			b = append(b, 11)
+		case 'f':
+			b = append(b, 12)
+		case 'r':
+			b = append(b, '\r')
+		case '"':
+			b = append(b, '"')
+		case '\\':
+			b = append(b, '\\')
+		default:
+			if s[i] >= '0' && s[i] <= '7' {
+				v := int(s[i] - '0')
+				for j := 0; j < 2 && i+1 < len(s)-1 && s[i+1] >= '0' && s[i+1] <= '7'; j++ {
+					i++
+					v = v*8 + int(s[i]-'0')
+				}
+				b = append(b, byte(v))
+			} else {
+				b = append(b, '\\', s[i])
+			}
+		}
+	}
+	return string(b)
 }
 
 // statusFromXY maps the porcelain v2 XY status codes to a single byte.

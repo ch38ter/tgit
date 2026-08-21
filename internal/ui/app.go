@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/fsnotify/fsnotify"
+	"github.com/muesli/reflow/truncate"
 	"tgit/internal/git"
 )
 
@@ -51,11 +52,15 @@ var (
 			Foreground(lipgloss.Color("1")).
 			Bold(true)
 
-	// Status line styles (colors chosen for visibility on dark background)
-	untrackedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))            // cyan
-	modifiedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Bold(true) // yellow + bold
-	deletedStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("5"))            // magenta
-	selectedStyle  = lipgloss.NewStyle().Reverse(true)                              // reverse video
+	untrackedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("108"))
+	modifiedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("180"))
+	deletedStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("174")).Strikethrough(true)
+	selectedStyle  = lipgloss.NewStyle().Reverse(true)
+	inactiveSelectedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+
+	filePathStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+
+	deletedPathStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("250")).Strikethrough(true)
 
 	// Commit row styles
 	commitHashStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("3")) // yellow
@@ -67,6 +72,18 @@ var (
 			Bold(true)
 )
 
+const (
+	focusedBorderColor   = "63"
+	unfocusedBorderColor = "240"
+)
+
+type focusedPane int
+
+const (
+	focusFiles focusedPane = iota
+	focusCommits
+)
+
 type model struct {
 	width         int
 	height        int
@@ -76,7 +93,9 @@ type model struct {
 	toplevel      string
 	changes       []git.FileChange
 	commits       []git.CommitRow
-	selectedIndex int
+	selectedFile   int
+	selectedCommit int
+	focusedPane    focusedPane
 	currentView   string
 	diffContent   string
 	diffTitle     string
@@ -100,10 +119,12 @@ type reloadMsg struct{}
 
 func InitialModel() *model {
 	return &model{
-		isGitRepo:     true,
-		currentView:   "files",
-		diffViewport:  viewport.New(80, 20),
-		selectedIndex: -1, // no selection by default
+		isGitRepo:      true,
+		currentView:    "files",
+		diffViewport:   viewport.New(80, 20),
+		selectedFile:   -1,
+		selectedCommit: -1,
+		focusedPane:    focusFiles,
 	}
 }
 
@@ -264,19 +285,42 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.debounceMu.Unlock()
 			return m, m.reload()
+		case "tab", "shift+tab":
+			if m.currentView != "files" {
+				return m, nil
+			}
+			if m.focusedPane == focusFiles {
+				m.focusedPane = focusCommits
+			} else {
+				m.focusedPane = focusFiles
+			}
 		case "j", "down":
 			if m.currentView == "diff" {
 				var cmd tea.Cmd
 				m.diffViewport, cmd = m.diffViewport.Update(msg)
 				return m, cmd
 			}
-			if len(m.changes) > 0 {
-				if m.selectedIndex < 0 {
-					m.selectedIndex = 0
-				} else {
-					m.selectedIndex++
-					if m.selectedIndex >= len(m.changes) {
-						m.selectedIndex = 0
+			switch m.focusedPane {
+			case focusFiles:
+				if len(m.changes) > 0 {
+					if m.selectedFile < 0 {
+						m.selectedFile = 0
+					} else {
+						m.selectedFile++
+						if m.selectedFile >= len(m.changes) {
+							m.selectedFile = 0
+						}
+					}
+				}
+			case focusCommits:
+				if len(m.commits) > 0 {
+					if m.selectedCommit < 0 {
+						m.selectedCommit = 0
+					} else {
+						m.selectedCommit++
+						if m.selectedCommit >= len(m.commits) {
+							m.selectedCommit = 0
+						}
 					}
 				}
 			}
@@ -286,39 +330,58 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.diffViewport, cmd = m.diffViewport.Update(msg)
 				return m, cmd
 			}
-			if len(m.changes) > 0 {
-				if m.selectedIndex < 0 {
-					m.selectedIndex = 0
-				} else {
-					m.selectedIndex--
-					if m.selectedIndex < 0 {
-						m.selectedIndex = len(m.changes) - 1
+			switch m.focusedPane {
+			case focusFiles:
+				if len(m.changes) > 0 {
+					if m.selectedFile < 0 {
+						m.selectedFile = 0
+					} else {
+						m.selectedFile--
+						if m.selectedFile < 0 {
+							m.selectedFile = len(m.changes) - 1
+						}
+					}
+				}
+			case focusCommits:
+				if len(m.commits) > 0 {
+					if m.selectedCommit < 0 {
+						m.selectedCommit = 0
+					} else {
+						m.selectedCommit--
+						if m.selectedCommit < 0 {
+							m.selectedCommit = len(m.commits) - 1
+						}
 					}
 				}
 			}
 		case "enter":
-			if m.currentView == "files" && m.selectedIndex >= 0 {
-				if len(m.commits) > 0 && m.selectedIndex < len(m.commits) {
-					commit := m.commits[m.selectedIndex]
-					diff, err := git.ShowCommit(commit.Hash)
-					if err != nil {
-						diff = err.Error()
-					}
-					m.diffContent = diff
-					m.diffTitle = commit.Hash
-					m.diffViewport.YOffset = 0
-					m.diffViewport.SetContent(diff)
-					m.currentView = "diff"
-					return m, nil
-				}
-				if len(m.changes) > 0 && m.selectedIndex < len(m.changes) {
-					fc := m.changes[m.selectedIndex]
+			if m.currentView != "files" {
+				return m, nil
+			}
+			switch m.focusedPane {
+			case focusFiles:
+				if len(m.changes) > 0 && m.selectedFile >= 0 && m.selectedFile < len(m.changes) {
+					fc := m.changes[m.selectedFile]
 					diff, err := git.FileDiff(fc.Path)
 					if err != nil {
 						diff = err.Error()
 					}
 					m.diffContent = diff
 					m.diffTitle = fc.Path
+					m.diffViewport.YOffset = 0
+					m.diffViewport.SetContent(diff)
+					m.currentView = "diff"
+					return m, nil
+				}
+			case focusCommits:
+				if len(m.commits) > 0 && m.selectedCommit >= 0 && m.selectedCommit < len(m.commits) {
+					commit := m.commits[m.selectedCommit]
+					diff, err := git.ShowCommit(commit.Hash)
+					if err != nil {
+						diff = err.Error()
+					}
+					m.diffContent = diff
+					m.diffTitle = commit.Hash
 					m.diffViewport.YOffset = 0
 					m.diffViewport.SetContent(diff)
 					m.currentView = "diff"
@@ -331,10 +394,52 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
+	case tea.MouseMsg:
+		if m.currentView != "files" {
+			return m, nil
+		}
+		if msg.Type != tea.MouseLeft {
+			return m, nil
+		}
+		if m.width == 0 || m.height == 0 {
+			return m, nil
+		}
+		middleHeight, bottomHeight := m.paneHeights()
+		headerH := headerHeight + 2
+		middleH := middleHeight + 2
+		bottomH := bottomHeight + 2
+		y := msg.Y
+		if y < headerH {
+			return m, nil
+		} else if y < headerH+middleH {
+			m.focusedPane = focusFiles
+			if len(m.changes) > 0 {
+				rel := y - headerH - 1
+				if rel < 0 {
+					rel = 0
+				}
+				if rel >= len(m.changes) {
+					rel = len(m.changes) - 1
+				}
+				m.selectedFile = rel
+			}
+		} else if y < headerH+middleH+bottomH {
+			m.focusedPane = focusCommits
+			if len(m.commits) > 0 {
+				rel := y - headerH - middleH - 1
+				if rel < 0 {
+					rel = 0
+				}
+				if rel >= len(m.commits) {
+					rel = len(m.commits) - 1
+				}
+				m.selectedCommit = rel
+			}
+		}
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.diffViewport.Width = msg.Width - 4
+		m.diffViewport.Width = msg.Width - 2
 		if m.diffViewport.Width < 1 {
 			m.diffViewport.Width = 1
 		}
@@ -344,11 +449,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.userName = msg.info.UserName
 		m.changes = msg.changes
 		m.commits = msg.commits
-		// Keep selectedIndex = -1 (no selection); only clamp if out of range
 		if len(m.changes) == 0 {
-			m.selectedIndex = -1
-		} else if m.selectedIndex >= len(m.changes) {
-			m.selectedIndex = len(m.changes) - 1
+			m.selectedFile = -1
+		} else if m.selectedFile >= len(m.changes) {
+			m.selectedFile = len(m.changes) - 1
+		}
+		if len(m.commits) == 0 {
+			m.selectedCommit = -1
+		} else if m.selectedCommit >= len(m.commits) {
+			m.selectedCommit = len(m.commits) - 1
 		}
 	case reloadMsg:
 		return m, tea.Batch(m.reload(), m.waitForReload())
@@ -365,8 +474,43 @@ func (m *model) View() string {
 		return "Loading..."
 	}
 
-	// Calculate pane heights
-	// Each pane adds 2 border lines (top+bottom); 3 panes → 6 extra lines.
+	middleHeight, bottomHeight := m.paneHeights()
+
+	w := m.width - 2
+	if w < 1 {
+		w = 1
+	}
+	middleAvail := middleHeight
+	bottomAvail := bottomHeight
+
+	// Dynamic border colors: focused pane bright (63), unfocused dim (240); header always 63
+	headerSt := headerStyle.BorderForeground(lipgloss.Color(focusedBorderColor))
+	middleBorder := unfocusedBorderColor
+	bottomBorder := unfocusedBorderColor
+	if m.currentView == "files" {
+		if m.focusedPane == focusFiles {
+			middleBorder = focusedBorderColor
+		} else {
+			bottomBorder = focusedBorderColor
+		}
+	} else {
+		middleBorder = focusedBorderColor
+	}
+	header := headerSt.Width(w).Height(headerHeight).Render(m.renderHeader())
+
+	var middle string
+	if m.currentView == "diff" {
+		middle = middleStyle.BorderForeground(lipgloss.Color(middleBorder)).Width(w).Height(middleHeight).Render(m.renderDiff(middleHeight))
+	} else {
+		middle = middleStyle.BorderForeground(lipgloss.Color(middleBorder)).Width(w).Height(middleHeight).Render(m.renderMiddleSized(middleAvail))
+	}
+
+	bottom := bottomStyle.BorderForeground(lipgloss.Color(bottomBorder)).Width(w).Height(bottomHeight).Render(m.renderBottomSized(bottomAvail))
+
+	return lipgloss.JoinVertical(lipgloss.Left, header, middle, bottom)
+}
+
+func (m *model) paneHeights() (int, int) {
 	remaining := m.height - headerHeight - 6
 	if remaining < 2 {
 		remaining = 2
@@ -379,29 +523,9 @@ func (m *model) View() string {
 	if bottomHeight < 1 {
 		bottomHeight = 1
 	}
-
-	// Render panes with lipgloss.
-	// lipgloss Width(w) sets CONTENT width; borders add 2 chars → total = w+2.
-	// Use width-4 for safety margin to ensure right border is visible.
-	w := m.width - 4
-	if w < 1 {
-		w = 1
-	}
-	header := headerStyle.Width(w).Height(headerHeight).Render(m.renderHeader())
-
-	var middle string
-	if m.currentView == "diff" {
-		middle = middleStyle.Width(w).Height(middleHeight).Render(m.renderDiff(middleHeight))
-	} else {
-		middle = middleStyle.Width(w).Height(middleHeight).Render(m.renderMiddle())
-	}
-
-	bottom := bottomStyle.Width(w).Height(bottomHeight).Render(m.renderBottom(bottomHeight))
-
-	return lipgloss.JoinVertical(lipgloss.Left, header, middle, bottom)
+	return middleHeight, bottomHeight
 }
 
-// renderHeader renders the top pane with repo info.
 func (m *model) renderHeader() string {
 	toplevel := m.toplevel
 	if home := os.Getenv("HOME"); home != "" {
@@ -416,28 +540,78 @@ func (m *model) renderHeader() string {
 	return fmt.Sprintf("%s  %s  %s\n%s", toplevel, m.branch, m.userName, changeStr)
 }
 
-// renderMiddle renders the file change list.
 func (m *model) renderMiddle() string {
+	_, mid := m.paneHeights()
+	return m.renderMiddleSized(mid)
+}
+
+func (m *model) renderMiddleSized(availableRows int) string {
 	if len(m.changes) == 0 {
 		return ""
 	}
 
+	contentWidth := m.width - 4
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
+
+	if availableRows < 0 {
+		availableRows = 0
+	}
+
+	start := 0
+	if m.selectedFile >= 0 && len(m.changes) > availableRows && availableRows > 0 {
+		start = m.selectedFile - availableRows + 1
+		if start < 0 {
+			start = 0
+		}
+		maxStart := len(m.changes) - availableRows
+		if start > maxStart {
+			start = maxStart
+		}
+	}
+
+	end := len(m.changes)
+	if availableRows > 0 && end-start > availableRows {
+		end = start + availableRows
+	}
+
 	var lines []string
-	for i, fc := range m.changes {
-		text := fmt.Sprintf("[%c] %s", fc.Status, fc.Path)
-		if i == m.selectedIndex {
-			lines = append(lines, selectedStyle.Render(text))
+	for i := start; i < end; i++ {
+		fc := m.changes[i]
+		line := truncate.StringWithTail(m.renderFileLine(fc), uint(contentWidth), "...")
+		if i == m.selectedFile {
+			if m.focusedPane == focusFiles && m.currentView == "files" {
+				lines = append(lines, selectedStyle.Render(line))
+			} else {
+				lines = append(lines, inactiveSelectedStyle.Render(line))
+			}
 		} else {
-			lines = append(lines, statusStyle(fc.Status).Render(text))
+			lines = append(lines, line)
 		}
 	}
 
 	return strings.Join(lines, "\n")
 }
 
+// renderFileLine renders one change row as "[<status>] <name>  /<path>", with
+// the basename first and the full path (root = /filename) in a lighter gray.
+// The status style applies only to the ANSI-free prefix and the gray path is a
+// separate segment — nesting pre-styled text inside a strikethrough style
+// (lipgloss renders it per character) would mangle the embedded ANSI.
+func (m *model) renderFileLine(fc git.FileChange) string {
+	prefix := fmt.Sprintf("[%c] %s", fc.Status, filepath.Base(fc.Path))
+	row := statusStyle(fc.Status).Render(prefix)
+	pathStyle := filePathStyle
+	if fc.Status == 'D' {
+		pathStyle = deletedPathStyle
+	}
+	return row + "  " + pathStyle.Render("/"+fc.Path)
+}
+
 // renderDiff renders the diff view with title line and viewport.
 func (m *model) renderDiff(middleHeight int) string {
-	vpWidth := m.width - 4
+	vpWidth := m.width - 2
 	vpHeight := middleHeight - 3 // account for borders and title line
 	if vpWidth < 1 {
 		vpWidth = 1
@@ -468,29 +642,42 @@ func statusStyle(status byte) lipgloss.Style {
 	}
 }
 
-// renderBottom renders the commit graph pane.
 func (m *model) renderBottom(height int) string {
-	if len(m.commits) == 0 {
-		return "no commits"
-	}
-
-	// Visible rows: subtract 2 for top/bottom border
 	visibleRows := height - 2
 	if visibleRows < 1 {
 		visibleRows = 1
 	}
+	return m.renderBottomSized(visibleRows)
+}
 
-	// Clamp selected index for bottom pane (keep -1 = no selection)
-	selectedIdx := m.selectedIndex
+func (m *model) renderBottomSized(visibleRows int) string {
+	if len(m.commits) == 0 {
+		return "no commits"
+	}
+
+	if visibleRows < 1 {
+		visibleRows = 1
+	}
+
+	selectedIdx := m.selectedCommit
 	if selectedIdx >= len(m.commits) {
 		selectedIdx = len(m.commits) - 1
 	}
 
+	contentWidth := m.width - 4
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
+
 	var lines []string
 	for i := 0; i < visibleRows && i < len(m.commits); i++ {
-		line := renderCommitLine(m.commits[i])
+		line := truncate.StringWithTail(renderCommitLine(m.commits[i]), uint(contentWidth), "...")
 		if i == selectedIdx {
-			lines = append(lines, selectedStyle.Render(line))
+			if m.focusedPane == focusCommits && m.currentView == "files" {
+				lines = append(lines, selectedStyle.Render(line))
+			} else {
+				lines = append(lines, inactiveSelectedStyle.Render(line))
+			}
 		} else {
 			lines = append(lines, line)
 		}
