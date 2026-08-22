@@ -19,7 +19,7 @@ import (
 	"tgit/internal/git"
 )
 
-const headerHeight = 2
+const headerHeight = 3
 
 // ASCII border: avoids Unicode box-drawing width calculation issues
 var asciiBorder = lipgloss.Border{
@@ -538,6 +538,20 @@ func (m *model) paneHeights() (int, int) {
 	return middleHeight, bottomHeight
 }
 
+func joinSegments(segs []string) string {
+	var out string
+	for i, seg := range segs {
+		if i > 0 {
+			// ASCII pipe, not U+00B7: the middle dot is East-Asian-ambiguous
+			// width and renders 2 cells in some terminal fonts, pushing the
+			// right border out of alignment (lipgloss counts it as 1).
+			out += headerSepStyle.Render(" | ")
+		}
+		out += seg
+	}
+	return out
+}
+
 func (m *model) renderHeader() string {
 	w := m.width - 4
 	if w < 1 {
@@ -551,33 +565,24 @@ func (m *model) renderHeader() string {
 		}
 	}
 
-	// Line 1: non-empty segments joined by a dim separator; empty segments are
-	// skipped entirely so no dangling separators are ever emitted.
-	var segments []string
+	var line1Segs []string
 	if toplevel != "" {
-		segments = append(segments, headerPathStyle.Render(toplevel))
+		line1Segs = append(line1Segs, headerPathStyle.Render(toplevel))
 	}
+	line1 := truncate.StringWithTail(joinSegments(line1Segs), uint(w), "...")
+
+	var line2Segs []string
 	if m.branch != "" {
-		segments = append(segments, headerBranchStyle.Render(m.branch))
+		line2Segs = append(line2Segs, headerBranchStyle.Render(m.branch))
 	}
 	if m.userName != "" {
-		segments = append(segments, headerUserStyle.Render(m.userName))
+		line2Segs = append(line2Segs, headerUserStyle.Render(m.userName))
 	}
-	var line1 string
-	for i, seg := range segments {
-		if i > 0 {
-			// ASCII pipe, not U+00B7: the middle dot is East-Asian-ambiguous
-			// width and renders 2 cells in some terminal fonts, pushing the
-			// right border out of alignment (lipgloss counts it as 1).
-			line1 += headerSepStyle.Render(" | ")
-		}
-		line1 += seg
-	}
-	line1 = truncate.StringWithTail(line1, uint(w), "...")
+	line2 := truncate.StringWithTail(joinSegments(line2Segs), uint(w), "...")
 
-	var line2 string
+	var line3 string
 	if len(m.changes) == 0 {
-		line2 = headerCleanStyle.Render("clean")
+		line3 = headerCleanStyle.Render("clean")
 	} else {
 		left := headerCountStyle.Render(strconv.Itoa(len(m.changes))) + " changed"
 
@@ -600,13 +605,13 @@ func (m *model) renderHeader() string {
 
 		gap := w - lipgloss.Width(left) - lipgloss.Width(right)
 		if gap >= 1 {
-			line2 = left + strings.Repeat(" ", gap) + right
+			line3 = left + strings.Repeat(" ", gap) + right
 		} else {
-			line2 = truncate.StringWithTail(left+" "+right, uint(w), "...")
+			line3 = truncate.StringWithTail(left+" "+right, uint(w), "...")
 		}
 	}
 
-	return line1 + "\n" + line2
+	return strings.Join([]string{line1, line2, line3}, "\n")
 }
 
 func (m *model) renderMiddle() string {

@@ -35,29 +35,29 @@ func TestHeaderDirtySummaryColoredAndRightAligned(t *testing.T) {
 
 	out := m.renderHeader()
 	lines := strings.Split(out, "\n")
-	if len(lines) != 2 {
-		t.Fatalf("renderHeader must return 2 lines, got %d: %q", len(lines), out)
+	if len(lines) != 3 {
+		t.Fatalf("renderHeader must return 3 lines, got %d: %q", len(lines), out)
 	}
-	line2 := lines[1]
+	summaryLine := lines[2]
 
-	if want := headerCountStyle.Render("3"); !strings.Contains(line2, want) {
-		t.Errorf("line2 missing colorized count %q: %q", stripANSI(want), stripANSI(line2))
+	if want := headerCountStyle.Render("3"); !strings.Contains(summaryLine, want) {
+		t.Errorf("summary line missing colorized count %q: %q", stripANSI(want), stripANSI(summaryLine))
 	}
-	if want := badgeModifiedStyle.Render("[M]2"); !strings.Contains(line2, want) {
-		t.Errorf("line2 missing [M]2 badge: %q", stripANSI(line2))
+	if want := badgeModifiedStyle.Render("[M]2"); !strings.Contains(summaryLine, want) {
+		t.Errorf("summary line missing [M]2 badge: %q", stripANSI(summaryLine))
 	}
-	if want := badgeUntrackedStyle.Render("[U]1"); !strings.Contains(line2, want) {
-		t.Errorf("line2 missing [U]1 badge: %q", stripANSI(line2))
+	if want := badgeUntrackedStyle.Render("[U]1"); !strings.Contains(summaryLine, want) {
+		t.Errorf("summary line missing [U]1 badge: %q", stripANSI(summaryLine))
 	}
-	if strings.Contains(stripANSI(line2), "[D]") {
-		t.Errorf("zero-count [D] badge must be hidden: %q", stripANSI(line2))
+	if strings.Contains(stripANSI(summaryLine), "[D]") {
+		t.Errorf("zero-count [D] badge must be hidden: %q", stripANSI(summaryLine))
 	}
 
 	const w = 80 - 4
-	if got := lipgloss.Width(line2); got != w {
-		t.Errorf("right-aligned line2 width = %d, want %d: %q", got, w, stripANSI(line2))
+	if got := lipgloss.Width(summaryLine); got != w {
+		t.Errorf("right-aligned summary line width = %d, want %d: %q", got, w, stripANSI(summaryLine))
 	}
-	stripped := stripANSI(line2)
+	stripped := stripANSI(summaryLine)
 	if !strings.Contains(stripped, "  ") {
 		t.Errorf("no right-align gap found between left summary and badges: %q", stripped)
 	}
@@ -78,13 +78,13 @@ func TestHeaderCleanShowsGreenClean(t *testing.T) {
 
 	out := m.renderHeader()
 	lines := strings.Split(out, "\n")
-	if len(lines) != 2 {
-		t.Fatalf("renderHeader must return 2 lines, got %d: %q", len(lines), out)
+	if len(lines) != 3 {
+		t.Fatalf("renderHeader must return 3 lines, got %d: %q", len(lines), out)
 	}
-	line2 := lines[1]
+	summaryLine := lines[2]
 
-	if want := headerCleanStyle.Render("clean"); !strings.Contains(line2, want) {
-		t.Errorf("clean repo line2 missing green clean marker: %q", stripANSI(line2))
+	if want := headerCleanStyle.Render("clean"); !strings.Contains(summaryLine, want) {
+		t.Errorf("clean repo summary line missing green clean marker: %q", stripANSI(summaryLine))
 	}
 	stripped := stripANSI(out)
 	if strings.Contains(stripped, "[M]") {
@@ -105,30 +105,31 @@ func TestHeaderSkipsEmptySegments(t *testing.T) {
 	m.userName = ""
 
 	out := m.renderHeader()
-	line1 := strings.Split(out, "\n")[0]
-	stripped := stripANSI(line1)
+	segLine := strings.Split(out, "\n")[1]
+	stripped := stripANSI(segLine)
 
-	if strings.Contains(line1, "|  |") {
-		t.Errorf("dangling double separator in line1: %q", stripped)
+	if strings.Contains(segLine, "|  |") {
+		t.Errorf("dangling double separator in branch/user line: %q", stripped)
 	}
 	if strings.HasPrefix(stripped, "|") || strings.HasSuffix(stripped, "|") {
-		t.Errorf("leading/trailing separator in line1: %q", stripped)
+		t.Errorf("leading/trailing separator in branch/user line: %q", stripped)
 	}
 	if n := strings.Count(stripped, "|"); n != 0 {
-		t.Errorf("single-segment line1 must have no separator, got %d: %q", n, stripped)
+		t.Errorf("single-segment line must have no separator, got %d: %q", n, stripped)
 	}
 
-	// Two segments (branch set, user empty): exactly one separator, branch last,
+	// Two segments (branch + user): exactly one separator, user last,
 	// no trailing separator after the final segment.
 	m.branch = "main"
+	m.userName = "u"
 	out = m.renderHeader()
-	line1 = strings.Split(out, "\n")[0]
-	stripped = stripANSI(line1)
+	segLine = strings.Split(out, "\n")[1]
+	stripped = stripANSI(segLine)
 	if n := strings.Count(stripped, "|"); n != 1 {
-		t.Errorf("two-segment line1 must have exactly one separator, got %d: %q", n, stripped)
+		t.Errorf("two-segment line must have exactly one separator, got %d: %q", n, stripped)
 	}
-	if !strings.HasSuffix(stripped, "main") {
-		t.Errorf("branch must be the last segment without dangling separator: %q", stripped)
+	if !strings.HasSuffix(stripped, "main | u") {
+		t.Errorf("segments must join as %q without dangling separator: %q", "main | u", stripped)
 	}
 }
 
