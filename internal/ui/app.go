@@ -383,7 +383,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.diffContent = diff
 					m.diffTitle = commit.Hash
 					m.diffViewport.YOffset = 0
-					m.diffViewport.SetContent(sanitizeTabs(diff))
+					m.diffViewport.SetContent(sanitizeTabs(styleCommitStat(diff, commitDiffWidth(m.width))))
 					m.currentView = "diff"
 					return m, tea.ClearScreen
 				}
@@ -616,11 +616,8 @@ func (m *model) renderDiff(middleHeight int) string {
 	// rendered line to this width prevents terminal line-wrapping, which would
 	// push rows out of sync with bubbletea's renderer and leave stale
 	// characters on screen when switching back to the files view.
-	vpWidth := m.width - 6
+	vpWidth := commitDiffWidth(m.width)
 	vpHeight := middleHeight - 3 // account for borders and title line
-	if vpWidth < 1 {
-		vpWidth = 1
-	}
 	if vpHeight < 1 {
 		vpHeight = 1
 	}
