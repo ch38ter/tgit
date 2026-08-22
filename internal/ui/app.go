@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -70,6 +71,17 @@ var (
 	diffTitleStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("6")).
 			Bold(true)
+
+	headerPathStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Bold(true)
+	headerBranchStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Bold(true)
+	headerUserStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	headerSepStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	headerCleanStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("108")).Bold(true)
+	headerCountStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Bold(true)
+
+	badgeModifiedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("180"))
+	badgeDeletedStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("174"))
+	badgeUntrackedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("108"))
 )
 
 const (
@@ -527,6 +539,11 @@ func (m *model) paneHeights() (int, int) {
 }
 
 func (m *model) renderHeader() string {
+	w := m.width - 4
+	if w < 1 {
+		w = 1
+	}
+
 	toplevel := m.toplevel
 	if home := os.Getenv("HOME"); home != "" {
 		if strings.HasPrefix(toplevel, home) {
@@ -534,10 +551,59 @@ func (m *model) renderHeader() string {
 		}
 	}
 
-	count := len(m.changes)
-	changeStr := fmt.Sprintf("%d changed", count)
+	// Line 1: non-empty segments joined by a dim separator; empty segments are
+	// skipped entirely so no dangling separators are ever emitted.
+	var segments []string
+	if toplevel != "" {
+		segments = append(segments, headerPathStyle.Render(toplevel))
+	}
+	if m.branch != "" {
+		segments = append(segments, headerBranchStyle.Render(m.branch))
+	}
+	if m.userName != "" {
+		segments = append(segments, headerUserStyle.Render(m.userName))
+	}
+	var line1 string
+	for i, seg := range segments {
+		if i > 0 {
+			line1 += headerSepStyle.Render(" · ")
+		}
+		line1 += seg
+	}
+	line1 = truncate.StringWithTail(line1, uint(w), "...")
 
-	return fmt.Sprintf("%s  %s  %s\n%s", toplevel, m.branch, m.userName, changeStr)
+	var line2 string
+	if len(m.changes) == 0 {
+		line2 = headerCleanStyle.Render("clean")
+	} else {
+		left := headerCountStyle.Render(strconv.Itoa(len(m.changes))) + " changed"
+
+		counts := make(map[byte]int)
+		for _, c := range m.changes {
+			counts[c.Status]++
+		}
+
+		var badges []string
+		if n := counts['M']; n > 0 {
+			badges = append(badges, badgeModifiedStyle.Render("[M]"+strconv.Itoa(n)))
+		}
+		if n := counts['D']; n > 0 {
+			badges = append(badges, badgeDeletedStyle.Render("[D]"+strconv.Itoa(n)))
+		}
+		if n := counts['U']; n > 0 {
+			badges = append(badges, badgeUntrackedStyle.Render("[U]"+strconv.Itoa(n)))
+		}
+		right := strings.Join(badges, " ")
+
+		gap := w - lipgloss.Width(left) - lipgloss.Width(right)
+		if gap >= 1 {
+			line2 = left + strings.Repeat(" ", gap) + right
+		} else {
+			line2 = truncate.StringWithTail(left+" "+right, uint(w), "...")
+		}
+	}
+
+	return line1 + "\n" + line2
 }
 
 func (m *model) renderMiddle() string {
