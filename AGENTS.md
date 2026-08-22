@@ -71,6 +71,7 @@ tgit/
 - fsnotify watcher：walk 时跳过 .git 但单独 watch .git 本身；事件经 400ms debounce 合并触发 reload；R 键手动刷新。
 - loadRepoData 排序规则：无 "/" 的文件在前、含 "/" 的目录在后，组内字典序。
 - `mapGraphChars` 目前是恒等函数（预留的 graph 字符扩展点）。
+- header 分隔符用 ASCII `|`（暗灰 240），不用 U+00B7 中点——后者是东亚歧义宽度，部分终端字体渲染 2 格而 lipgloss 计 1 格，会把右边框顶出对位（fix b7fcaf5）。同理慎用其他歧义宽度字符做行内装饰。
 - log.go `LogGraphAt` 绕过 RunGit 自建 exec.Command（无 GIT_OPTIONAL_LOCKS=0）——已知不一致；改动该文件时优先收敛到 RunGit。
 - gofmt 对 app.go / status.go / app_test.go 会报预存对齐偏差：改动时勿顺手全文件格式化，避免噪音 diff。
 - 无 cmd/ 目录（package main 在根）；go.mod module 名为裸 `tgit`；`tgit` 二进制是 .gitignore 覆盖的构建产物。
