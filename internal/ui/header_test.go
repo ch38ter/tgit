@@ -108,13 +108,13 @@ func TestHeaderSkipsEmptySegments(t *testing.T) {
 	line1 := strings.Split(out, "\n")[0]
 	stripped := stripANSI(line1)
 
-	if strings.Contains(line1, "·  ·") {
+	if strings.Contains(line1, "|  |") {
 		t.Errorf("dangling double separator in line1: %q", stripped)
 	}
-	if strings.HasPrefix(stripped, "·") || strings.HasSuffix(stripped, "·") {
+	if strings.HasPrefix(stripped, "|") || strings.HasSuffix(stripped, "|") {
 		t.Errorf("leading/trailing separator in line1: %q", stripped)
 	}
-	if n := strings.Count(stripped, "·"); n != 0 {
+	if n := strings.Count(stripped, "|"); n != 0 {
 		t.Errorf("single-segment line1 must have no separator, got %d: %q", n, stripped)
 	}
 
@@ -124,7 +124,7 @@ func TestHeaderSkipsEmptySegments(t *testing.T) {
 	out = m.renderHeader()
 	line1 = strings.Split(out, "\n")[0]
 	stripped = stripANSI(line1)
-	if n := strings.Count(stripped, "·"); n != 1 {
+	if n := strings.Count(stripped, "|"); n != 1 {
 		t.Errorf("two-segment line1 must have exactly one separator, got %d: %q", n, stripped)
 	}
 	if !strings.HasSuffix(stripped, "main") {

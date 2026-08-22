@@ -566,7 +566,10 @@ func (m *model) renderHeader() string {
 	var line1 string
 	for i, seg := range segments {
 		if i > 0 {
-			line1 += headerSepStyle.Render(" · ")
+			// ASCII pipe, not U+00B7: the middle dot is East-Asian-ambiguous
+			// width and renders 2 cells in some terminal fonts, pushing the
+			// right border out of alignment (lipgloss counts it as 1).
+			line1 += headerSepStyle.Render(" | ")
 		}
 		line1 += seg
 	}
