@@ -1,6 +1,7 @@
 package git
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -222,6 +223,50 @@ func TestLogGraph_CurrentDirectory(t *testing.T) {
 
 	if len(rows) != 1 {
 		t.Fatalf("expected 1 row, got %d", len(rows))
+	}
+}
+
+func TestLogGraphAppendAt_SkipAndMax(t *testing.T) {
+	dir := t.TempDir()
+	gitRun(t, dir, "init", "-b", "main")
+	gitRun(t, dir, "config", "user.email", "test@example.com")
+	gitRun(t, dir, "config", "user.name", "Test")
+
+	for i := 1; i <= 5; i++ {
+		writeFile(t, dir, "file.txt", fmt.Sprintf("content %d", i))
+		gitRun(t, dir, "add", ".")
+		gitRun(t, dir, "commit", "-m", fmt.Sprintf("commit %d", i))
+	}
+
+	all, err := LogGraphAt(dir, 200)
+	if err != nil {
+		t.Fatalf("LogGraphAt error: %v", err)
+	}
+	if len(all) != 5 {
+		t.Fatalf("expected 5 rows, got %d", len(all))
+	}
+
+	page, err := LogGraphAppendAt(dir, 3, 2)
+	if err != nil {
+		t.Fatalf("LogGraphAppendAt error: %v", err)
+	}
+	if len(page) != 2 {
+		t.Fatalf("expected exactly 2 rows (skip=3,max=2), got %d", len(page))
+	}
+	if page[0].Hash != all[3].Hash || page[1].Hash != all[4].Hash {
+		t.Errorf("page hashes mismatch: got %s,%s want %s,%s",
+			page[0].Hash, page[1].Hash, all[3].Hash, all[4].Hash)
+	}
+	if page[0].Msg != "commit 2" || page[1].Msg != "commit 1" {
+		t.Errorf("page messages mismatch: got %q,%q", page[0].Msg, page[1].Msg)
+	}
+
+	exhausted, err := LogGraphAppendAt(dir, 5, 200)
+	if err != nil {
+		t.Fatalf("LogGraphAppendAt past end error: %v", err)
+	}
+	if len(exhausted) != 0 {
+		t.Errorf("expected empty page past end, got %d rows", len(exhausted))
 	}
 }
 

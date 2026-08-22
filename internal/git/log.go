@@ -51,6 +51,48 @@ func LogGraphAt(dir string, max int) ([]CommitRow, error) {
 	return rows, nil
 }
 
+// LogGraphAppendAt fetches the next page of history after alreadyLoaded rows,
+// running `git log --skip=<alreadyLoaded> -n <max> --graph --oneline --decorate --all`.
+// Empty stdout (nothing left) yields an empty slice and nil error.
+//
+// git draws each page's ASCII graph standalone, so an appended page's
+// connector glyphs may not visually continue the previous page's graph
+// lines — accepted trade-off for on-demand paging.
+func LogGraphAppendAt(dir string, alreadyLoaded int, max int) ([]CommitRow, error) {
+	if max <= 0 {
+		max = 200
+	}
+	if alreadyLoaded < 0 {
+		alreadyLoaded = 0
+	}
+
+	cmd := exec.Command("git", "log",
+		"--skip="+strconv.Itoa(alreadyLoaded),
+		"-n", strconv.Itoa(max),
+		"--graph", "--oneline", "--decorate", "--all")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		// Empty repo (no commits) produces an exit error with no stdout.
+		if len(out) == 0 {
+			return []CommitRow{}, nil
+		}
+		return nil, err
+	}
+
+	var rows []CommitRow
+	for _, line := range strings.Split(string(out), "\n") {
+		if line == "" {
+			continue
+		}
+		if row, ok := parseLine(line); ok {
+			rows = append(rows, row)
+		}
+	}
+
+	return rows, nil
+}
+
 // graphChars is the set of characters that can appear in the ASCII graph prefix.
 const graphChars = "|*/\\_- "
 

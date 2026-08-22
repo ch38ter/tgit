@@ -113,6 +113,8 @@ type model struct {
 	diffTitle     string
 	diffViewport  viewport.Model
 
+	commitsExhausted bool
+
 	watcher       *fsnotify.Watcher
 	debounceTimer *time.Timer
 	needsReload   bool
@@ -128,6 +130,11 @@ type repoDataMsg struct {
 }
 
 type reloadMsg struct{}
+
+type commitsAppendedMsg struct {
+	rows      []git.CommitRow
+	exhausted bool
+}
 
 func InitialModel() *model {
 	return &model{
@@ -329,9 +336,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if m.selectedCommit < 0 {
 						m.selectedCommit = 0
 					} else {
-						m.selectedCommit++
-						if m.selectedCommit >= len(m.commits) {
+						next := m.selectedCommit + 1
+						if next >= len(m.commits) {
+							if !m.commitsExhausted {
+								m.selectedCommit = len(m.commits) - 1
+								return m, m.loadMoreCommits()
+							}
 							m.selectedCommit = 0
+						} else {
+							m.selectedCommit = next
 						}
 					}
 				}
@@ -461,6 +474,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.userName = msg.info.UserName
 		m.changes = msg.changes
 		m.commits = msg.commits
+		m.commitsExhausted = false
 		if len(m.changes) == 0 {
 			m.selectedFile = -1
 		} else if m.selectedFile >= len(m.changes) {
@@ -473,6 +487,25 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case reloadMsg:
 		return m, tea.Batch(m.reload(), m.waitForReload())
+	case commitsAppendedMsg:
+		existing := make(map[string]bool, len(m.commits))
+		for _, c := range m.commits {
+			existing[c.Hash] = true
+		}
+		appended := 0
+		for _, r := range msg.rows {
+			if r.Hash == "" || existing[r.Hash] {
+				continue
+			}
+			m.commits = append(m.commits, r)
+			existing[r.Hash] = true
+			appended++
+		}
+		m.selectedCommit += appended
+		if msg.exhausted || len(msg.rows) < 200 {
+			m.commitsExhausted = true
+		}
+		return m, nil
 	}
 	return m, nil
 }
@@ -614,6 +647,17 @@ func (m *model) renderHeader() string {
 	return strings.Join([]string{line1, line2, line3}, "\n")
 }
 
+func (m *model) loadMoreCommits() tea.Cmd {
+	loaded := len(m.commits)
+	return func() tea.Msg {
+		rows, err := git.LogGraphAppendAt(".", loaded, 200)
+		if err != nil {
+			return commitsAppendedMsg{exhausted: true}
+		}
+		return commitsAppendedMsg{rows: rows, exhausted: len(rows) < 200}
+	}
+}
+
 func (m *model) renderMiddle() string {
 	_, mid := m.paneHeights()
 	return m.renderMiddleSized(mid)
@@ -753,8 +797,25 @@ func (m *model) renderBottomSized(visibleRows int) string {
 		contentWidth = 1
 	}
 
+	start := 0
+	if selectedIdx >= 0 && len(m.commits) > visibleRows && visibleRows > 0 {
+		start = selectedIdx - visibleRows + 1
+		if start < 0 {
+			start = 0
+		}
+		maxStart := len(m.commits) - visibleRows
+		if start > maxStart {
+			start = maxStart
+		}
+	}
+
+	end := len(m.commits)
+	if visibleRows > 0 && end-start > visibleRows {
+		end = start + visibleRows
+	}
+
 	var lines []string
-	for i := 0; i < visibleRows && i < len(m.commits); i++ {
+	for i := start; i < end; i++ {
 		line := truncate.StringWithTail(renderCommitLine(m.commits[i]), uint(contentWidth), "...")
 		if i == selectedIdx {
 			if m.focusedPane == focusCommits && m.currentView == "files" {
