@@ -3,6 +3,7 @@ package ui
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -211,5 +212,150 @@ func TestRenderCommitLineColoredGraph(t *testing.T) {
 	}
 	if !strings.Contains(out, graphPalette[0].Render("│")) {
 		t.Errorf("column-0 pipe not colored with palette[0]: %q", out)
+	}
+}
+
+// styledCol is one visible display column: the rune shown plus the SGR
+// sequence in effect before it. ANSI sequences occupy no columns.
+type styledCol struct {
+	ch  rune
+	sgr string
+}
+
+func styledColumns(s string) []styledCol {
+	var cols []styledCol
+	cur := ""
+	for i := 0; i < len(s); {
+		if s[i] == '\x1b' {
+			end := strings.IndexByte(s[i:], 'm')
+			if end >= 0 {
+				seq := s[i : i+end+1]
+				if strings.HasSuffix(seq, "[0m") {
+					cur = ""
+				} else {
+					cur = seq
+				}
+				i += end + 1
+				continue
+			}
+		}
+		r, size := utf8.DecodeRuneInString(s[i:])
+		cols = append(cols, styledCol{ch: r, sgr: cur})
+		i += size
+	}
+	return cols
+}
+
+func TestSynthesizeLanesFillsContinuity(t *testing.T) {
+	forceANSI256(t)
+
+	got := synthesizeGraphLanes([]git.CommitRow{
+		{Graph: "* "},
+		{Graph: "| * "},
+		{Graph: "* "},
+	})
+	if len(got) != 3 {
+		t.Fatalf("expected 3 output rows, got %d", len(got))
+	}
+
+	structs := make([]string, len(got))
+	cols := make([][]styledCol, len(got))
+	for i, s := range got {
+		structs[i] = stripANSI(s)
+		cols[i] = styledColumns(s)
+	}
+
+	for i, s := range structs {
+		rs := []rune(s)
+		if len(rs) > 1 && rs[1] != ' ' {
+			t.Errorf("row %d column 1 is a dead lane and must stay a space, got %q", i, s)
+		}
+	}
+
+	wantFillerSGR := styledColumns(graphFillers[1].Render("│"))[0].sgr
+	for _, row := range []int{0, 2} {
+		if cols[row][2].ch != '│' {
+			t.Errorf("row %d must gain synthesized filler at column 2, got %q", row, structs[row])
+		}
+		if cols[row][2].sgr != wantFillerSGR {
+			t.Errorf("row %d filler must carry palette[1] SGR %q, got %q", row, wantFillerSGR, cols[row][2].sgr)
+		}
+	}
+
+	if cols[1][0].ch != '│' || cols[1][2].ch != '●' {
+		t.Errorf("row 1 must keep │@0 and ●@2, got %q", structs[1])
+	}
+}
+
+func TestSynthesizeLanesMergeShape(t *testing.T) {
+	forceANSI256(t)
+
+	got := synthesizeGraphLanes([]git.CommitRow{
+		{Graph: "| * "},
+		{Graph: "|\\"},
+		{Graph: "| * "},
+		{Graph: "|/"},
+		{Graph: "* "},
+	})
+	structs := make([]string, len(got))
+	for i, s := range got {
+		structs[i] = stripANSI(s)
+	}
+
+	const forkRow, dotRow, mergeRow = 1, 2, 3
+
+	dotCols := []rune(structs[dotRow])
+	forkCols := []rune(structs[forkRow])
+	mergeCols := []rune(structs[mergeRow])
+
+	runeIndex := func(rs []rune, r rune) int {
+		for i, x := range rs {
+			if x == r {
+				return i
+			}
+		}
+		return -1
+	}
+
+	dotCol := runeIndex(dotCols, '●')
+	if dotCol != 2 {
+		t.Fatalf("feature dot expected at column 2, got %d (%q)", dotCol, structs[dotRow])
+	}
+
+	if mergeCols[dotCol-1] != '╯' {
+		t.Errorf("╯ must sit below-left of the lane dot at column %d, got %q", dotCol-1, structs[mergeRow])
+	}
+
+	forkCol := runeIndex(forkCols, '╰')
+	if forkCol < 0 {
+		t.Fatalf("fork row must contain ╰: %q", structs[forkRow])
+	}
+
+	if forkCols[dotCol] != '│' {
+		t.Errorf("fork row must bridge to the lane with │ at column %d, got %q", dotCol, structs[forkRow])
+	}
+	if dotCols[forkCol] != '│' {
+		t.Errorf("dot row must bridge to the fork with │ at column %d, got %q", forkCol, structs[dotRow])
+	}
+	if mergeCols[dotCol] != '│' {
+		t.Errorf("merge row must bridge to the lane with │ at column %d, got %q", dotCol, structs[mergeRow])
+	}
+}
+
+func TestSynthesizeLanesEdges(t *testing.T) {
+	forceANSI256(t)
+
+	if got := synthesizeGraphLanes(nil); len(got) != 0 {
+		t.Errorf("nil input must yield empty output, got %d rows", len(got))
+	}
+
+	lone := synthesizeGraphLanes([]git.CommitRow{{Graph: "|/"}})
+	if want := colorGraph("|/"); lone[0] != want {
+		t.Errorf("lone graph-only row must equal colorGraph:\ngot  = %q\nwant = %q", lone[0], want)
+	}
+
+	top := synthesizeGraphLanes([]git.CommitRow{{Graph: "|\\"}, {Graph: "* "}})
+	if !strings.Contains(stripANSI(top[0]), "╰") || !strings.Contains(stripANSI(top[1]), "●") {
+		t.Errorf("window-edge rows must keep their own glyphs, got %q / %q", stripANSI(top[0]), stripANSI(top[1]))
 	}
 }

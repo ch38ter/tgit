@@ -868,9 +868,19 @@ func (m *model) renderBottomSized(visibleRows int) string {
 		end = start + visibleRows
 	}
 
+	ctxStart := start - 1
+	if ctxStart < 0 {
+		ctxStart = 0
+	}
+	ctxEnd := end + 1
+	if ctxEnd > len(m.commits) {
+		ctxEnd = len(m.commits)
+	}
+	filled := synthesizeGraphLanes(m.commits[ctxStart:ctxEnd])
+
 	var lines []string
 	for i := start; i < end; i++ {
-		line := renderCommitLine(m.commits[i], contentWidth)
+		line := renderCommitLineStyled(m.commits[i], filled[i-ctxStart], contentWidth)
 		// truncate reserves tail cells even for fitting rows, so only invoke
 		// it when the row actually overflows (same counter as truncate).
 		if ansi.PrintableRuneWidth(line) > contentWidth {
@@ -895,10 +905,16 @@ func (m *model) renderBottomSized(visibleRows int) string {
 // otherwise they degrade to inline after the hash. Truncation of the whole
 // row remains the caller's job.
 func renderCommitLine(commit git.CommitRow, width int) string {
+	return renderCommitLineStyled(commit, colorGraph(commit.Graph), width)
+}
+
+// renderCommitLineStyled takes a pre-styled graph segment (e.g. from
+// synthesizeGraphLanes); styledGraph must not pass through colorGraph again —
+// its embedded fillers would shift the column counter and recolor dots.
+func renderCommitLineStyled(commit git.CommitRow, styledGraph string, width int) string {
 	if commit.Hash == "" {
-		return colorGraph(commit.Graph)
+		return styledGraph
 	}
-	graph := colorGraph(commit.Graph)
 	hash := commitHashStyle.Render(commit.Hash)
 	styledRefs := commitRefsStyle.Render(commit.Refs)
 	var author string
@@ -907,15 +923,15 @@ func renderCommitLine(commit git.CommitRow, width int) string {
 	}
 
 	if commit.Refs == "" {
-		return fmt.Sprintf("%s %s %s%s", graph, hash, commit.Msg, author)
+		return fmt.Sprintf("%s %s %s%s", styledGraph, hash, commit.Msg, author)
 	}
 
-	left := fmt.Sprintf("%s %s %s", graph, hash, commit.Msg) + author
+	left := fmt.Sprintf("%s %s %s", styledGraph, hash, commit.Msg) + author
 	gap := width - lipgloss.Width(left) - lipgloss.Width(styledRefs)
 	if gap >= 1 {
 		return left + strings.Repeat(" ", gap) + styledRefs
 	}
-	return fmt.Sprintf("%s %s %s %s%s", graph, hash, styledRefs, commit.Msg, author)
+	return fmt.Sprintf("%s %s %s %s%s", styledGraph, hash, styledRefs, commit.Msg, author)
 }
 
 // unicodeGlyphs maps ASCII graph characters to their display glyphs.
