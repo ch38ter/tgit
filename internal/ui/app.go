@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/fsnotify/fsnotify"
+	"github.com/muesli/reflow/ansi"
 	"github.com/muesli/reflow/truncate"
 	"tgit/internal/git"
 )
@@ -817,7 +818,12 @@ func (m *model) renderBottomSized(visibleRows int) string {
 
 	var lines []string
 	for i := start; i < end; i++ {
-		line := truncate.StringWithTail(renderCommitLine(m.commits[i]), uint(contentWidth), "...")
+		line := renderCommitLine(m.commits[i], contentWidth)
+		// truncate reserves tail cells even for fitting rows, so only invoke
+		// it when the row actually overflows (same counter as truncate).
+		if ansi.PrintableRuneWidth(line) > contentWidth {
+			line = truncate.StringWithTail(line, uint(contentWidth), "...")
+		}
 		if i == selectedIdx {
 			if m.focusedPane == focusCommits && m.currentView == "files" {
 				lines = append(lines, selectedStyle.Render(line))
@@ -832,20 +838,29 @@ func (m *model) renderBottomSized(visibleRows int) string {
 	return strings.Join(lines, "\n")
 }
 
-// renderCommitLine renders a single commit row with graph, hash, refs, and message.
-func renderCommitLine(commit git.CommitRow) string {
+// renderCommitLine renders a single commit row with graph, hash, refs, and
+// message. With refs present and room to spare, refs right-align at width;
+// otherwise they degrade to inline after the hash. Truncation of the whole
+// row remains the caller's job.
+func renderCommitLine(commit git.CommitRow, width int) string {
 	graph := colorGraph(commit.Graph)
 	hash := commitHashStyle.Render(commit.Hash)
-	refs := commitRefsStyle.Render(commit.Refs)
+	styledRefs := commitRefsStyle.Render(commit.Refs)
 	var author string
 	if commit.Author != "" {
 		author = authorStyle.Render("  " + commit.Author)
 	}
 
-	if commit.Refs != "" {
-		return fmt.Sprintf("%s %s %s %s%s", graph, hash, refs, commit.Msg, author)
+	if commit.Refs == "" {
+		return fmt.Sprintf("%s %s %s%s", graph, hash, commit.Msg, author)
 	}
-	return fmt.Sprintf("%s %s %s%s", graph, hash, commit.Msg, author)
+
+	left := fmt.Sprintf("%s %s %s", graph, hash, commit.Msg) + author
+	gap := width - lipgloss.Width(left) - lipgloss.Width(styledRefs)
+	if gap >= 1 {
+		return left + strings.Repeat(" ", gap) + styledRefs
+	}
+	return fmt.Sprintf("%s %s %s %s%s", graph, hash, styledRefs, commit.Msg, author)
 }
 
 // unicodeGlyphs maps ASCII graph characters to their display glyphs.
