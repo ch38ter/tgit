@@ -833,7 +833,7 @@ func (m *model) renderBottomSized(visibleRows int) string {
 
 // renderCommitLine renders a single commit row with graph, hash, refs, and message.
 func renderCommitLine(commit git.CommitRow) string {
-	graph := mapGraphChars(commit.Graph)
+	graph := colorGraph(mapGraphChars(commit.Graph))
 	hash := commitHashStyle.Render(commit.Hash)
 	refs := commitRefsStyle.Render(commit.Refs)
 
