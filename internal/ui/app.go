@@ -834,7 +834,7 @@ func (m *model) renderBottomSized(visibleRows int) string {
 
 // renderCommitLine renders a single commit row with graph, hash, refs, and message.
 func renderCommitLine(commit git.CommitRow) string {
-	graph := colorGraph(mapGraphChars(commit.Graph))
+	graph := colorGraph(commit.Graph)
 	hash := commitHashStyle.Render(commit.Hash)
 	refs := commitRefsStyle.Render(commit.Refs)
 	var author string
@@ -848,7 +848,26 @@ func renderCommitLine(commit git.CommitRow) string {
 	return fmt.Sprintf("%s %s %s%s", graph, hash, commit.Msg, author)
 }
 
-// mapGraphChars keeps git log --graph ASCII characters as-is for terminal compatibility.
-func mapGraphChars(s string) string {
-	return s
+// unicodeGlyphs maps ASCII graph characters to their display glyphs.
+var unicodeGlyphs = map[rune]string{
+	'|':  "│",
+	'*':  "●",
+	'/':  "╯",
+	'\\': "╰",
+	'_':  "─",
+	'-':  "─",
+}
+
+// asciiFallback renders every graph character as itself:
+// var asciiFallback = map[rune]string{
+// 	'|': "|", '*': "*", '/': "/", '\\': "\\", '_': "_", '-': "-",
+// }
+//
+// To roll back (e.g. if ● renders double-width in the user's font, the
+// b7fcaf5 lesson), swap the returned table below to asciiFallback.
+func mapGraphChars(r rune) string {
+	if g, ok := unicodeGlyphs[r]; ok {
+		return g
+	}
+	return string(r)
 }

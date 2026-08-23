@@ -57,7 +57,7 @@ func TestColorGraphAlternatesColorsByColumn(t *testing.T) {
 	out := colorGraph("| * | * ")
 
 	starSGRs := map[string]bool{}
-	for _, idx := range charIndices(out, "*") {
+	for _, idx := range charIndices(out, "●") {
 		starSGRs[lastSGR(precedingSGR(out, idx))] = true
 	}
 	if len(starSGRs) != 2 {
@@ -65,7 +65,7 @@ func TestColorGraphAlternatesColorsByColumn(t *testing.T) {
 	}
 
 	pipeSGRs := map[string]bool{}
-	for _, idx := range charIndices(out, "|") {
+	for _, idx := range charIndices(out, "│") {
 		pipeSGRs[lastSGR(precedingSGR(out, idx))] = true
 	}
 	if len(pipeSGRs) != 2 {
@@ -77,7 +77,7 @@ func TestColorGraphStarIsBold(t *testing.T) {
 	forceANSI256(t)
 
 	out := colorGraph("* ")
-	for _, idx := range charIndices(out, "*") {
+	for _, idx := range charIndices(out, "●") {
 		codes := sgrCodes(lastSGR(precedingSGR(out, idx)))
 		bold := false
 		for _, c := range codes {
@@ -97,8 +97,8 @@ func TestColorGraphMergeDecrementsColumn(t *testing.T) {
 	merged := colorGraph("|/*")
 	plain := colorGraph("* x")
 
-	mStar := charIndices(merged, "*")
-	pStar := charIndices(plain, "*")
+	mStar := charIndices(merged, "●")
+	pStar := charIndices(plain, "●")
 	if len(mStar) != 1 || len(pStar) != 1 {
 		t.Fatalf("fixture broken: merged stars=%d plain stars=%d", len(mStar), len(pStar))
 	}
@@ -106,6 +106,27 @@ func TestColorGraphMergeDecrementsColumn(t *testing.T) {
 	gotPlain := lastSGR(precedingSGR(plain, pStar[0]))
 	if gotMerge == "" || gotMerge != gotPlain {
 		t.Errorf("'*' after '|/' must reuse column-0 color:\nmerge: %q\nplain: %q", gotMerge, gotPlain)
+	}
+}
+
+func TestMapGraphCharsTable(t *testing.T) {
+	tests := []struct {
+		in   rune
+		want string
+	}{
+		{'|', "│"},
+		{'*', "●"},
+		{'/', "╯"},
+		{'\\', "╰"},
+		{'_', "─"},
+		{'-', "─"},
+		{'x', "x"},
+		{' ', " "},
+	}
+	for _, tc := range tests {
+		if got := mapGraphChars(tc.in); got != tc.want {
+			t.Errorf("mapGraphChars(%q) = %q, want %q", tc.in, got, tc.want)
+		}
 	}
 }
 
@@ -130,7 +151,7 @@ func TestRenderCommitLineColoredGraph(t *testing.T) {
 	if strings.Index(out, "\x1b[") >= strings.Index(out, "abc1234") {
 		t.Errorf("graph segment must be colorized before the hash: %q", out)
 	}
-	if !strings.Contains(out, graphPalette[0].Render("|")) {
+	if !strings.Contains(out, graphPalette[0].Render("│")) {
 		t.Errorf("column-0 pipe not colored with palette[0]: %q", out)
 	}
 }

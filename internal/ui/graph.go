@@ -27,19 +27,17 @@ func colorGraph(graph string) string {
 	for _, r := range graph {
 		switch r {
 		case '|':
-			b.WriteString(graphPalette[colIdx%len(graphPalette)].Render("|"))
+			b.WriteString(graphPalette[colIdx%len(graphPalette)].Render(mapGraphChars(r)))
 			colIdx++
 		case '*':
-			b.WriteString(graphPalette[colIdx%len(graphPalette)].Bold(true).Render("*"))
+			b.WriteString(graphPalette[colIdx%len(graphPalette)].Bold(true).Render(mapGraphChars(r)))
 		case '/':
-			b.WriteString(graphPalette[colIdx%len(graphPalette)].Render("/"))
+			b.WriteString(graphPalette[colIdx%len(graphPalette)].Render(mapGraphChars(r)))
 			if colIdx > 0 {
 				colIdx--
 			}
-		case '\\':
-			b.WriteString(graphPalette[colIdx%len(graphPalette)].Render("\\"))
-		case '_':
-			b.WriteString(graphPalette[colIdx%len(graphPalette)].Render("_"))
+		case '\\', '_', '-':
+			b.WriteString(graphPalette[colIdx%len(graphPalette)].Render(mapGraphChars(r)))
 		default:
 			b.WriteRune(r)
 		}
