@@ -336,7 +336,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case focusCommits:
 				if len(m.commits) > 0 {
 					if m.selectedCommit < 0 {
-						m.selectedCommit = 0
+						m.selectedCommit = skipGraphOnly(m.commits, 0, 1)
 					} else {
 						next := m.selectedCommit + 1
 						if next >= len(m.commits) {
@@ -348,6 +348,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						} else {
 							m.selectedCommit = next
 						}
+						m.selectedCommit = skipGraphOnly(m.commits, m.selectedCommit, 1)
 					}
 				}
 			}
@@ -374,10 +375,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if m.selectedCommit < 0 {
 						m.selectedCommit = 0
 					} else {
-						m.selectedCommit--
-						if m.selectedCommit < 0 {
+						next := m.selectedCommit - 1
+						if next < 0 {
 							m.selectedCommit = len(m.commits) - 1
+						} else {
+							m.selectedCommit = next
 						}
+						m.selectedCommit = skipGraphOnly(m.commits, m.selectedCommit, -1)
 					}
 				}
 			}
@@ -460,7 +464,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if rel >= len(m.commits) {
 					rel = len(m.commits) - 1
 				}
-				m.selectedCommit = rel
+				m.selectedCommit = skipGraphOnly(m.commits, rel, 1)
 			}
 		}
 	case tea.WindowSizeMsg:
@@ -487,6 +491,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if m.selectedCommit >= len(m.commits) {
 			m.selectedCommit = len(m.commits) - 1
 		}
+		if m.selectedCommit >= 0 {
+			m.selectedCommit = skipGraphOnly(m.commits, m.selectedCommit, 1)
+		}
 	case reloadMsg:
 		return m, tea.Batch(m.reload(), m.waitForReload())
 	case commitsAppendedMsg:
@@ -496,7 +503,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		appended := 0
 		for _, r := range msg.rows {
-			if r.Hash == "" || existing[r.Hash] {
+			if r.Hash == "" {
+				m.commits = append(m.commits, r)
+				continue
+			}
+			if existing[r.Hash] {
 				continue
 			}
 			m.commits = append(m.commits, r)
@@ -504,6 +515,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			appended++
 		}
 		m.selectedCommit += appended
+		m.selectedCommit = skipGraphOnly(m.commits, m.selectedCommit, 1)
 		if msg.exhausted || len(msg.rows) < 200 {
 			m.commitsExhausted = true
 		}
@@ -649,8 +661,48 @@ func (m *model) renderHeader() string {
 	return strings.Join([]string{line1, line2, line3}, "\n")
 }
 
+// skipGraphOnly returns the nearest index at or after idx walking dir whose
+// row is a real commit (Hash != ""); on leaving the bounds it reverses
+// direction from idx. Returns idx unchanged when no commit row exists.
+func skipGraphOnly(rows []git.CommitRow, idx int, dir int) int {
+	if len(rows) == 0 {
+		return idx
+	}
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= len(rows) {
+		idx = len(rows) - 1
+	}
+	i := idx
+	for i >= 0 && i < len(rows) && rows[i].Hash == "" {
+		i += dir
+	}
+	if i >= 0 && i < len(rows) {
+		return i
+	}
+	i = idx - dir
+	for i >= 0 && i < len(rows) && rows[i].Hash == "" {
+		i -= dir
+	}
+	if i >= 0 && i < len(rows) {
+		return i
+	}
+	return idx
+}
+
+func countCommits(rows []git.CommitRow) int {
+	n := 0
+	for _, r := range rows {
+		if r.Hash != "" {
+			n++
+		}
+	}
+	return n
+}
+
 func (m *model) loadMoreCommits() tea.Cmd {
-	loaded := len(m.commits)
+	loaded := countCommits(m.commits)
 	return func() tea.Msg {
 		rows, err := git.LogGraphAppendAt(".", loaded, 200)
 		if err != nil {
@@ -843,6 +895,9 @@ func (m *model) renderBottomSized(visibleRows int) string {
 // otherwise they degrade to inline after the hash. Truncation of the whole
 // row remains the caller's job.
 func renderCommitLine(commit git.CommitRow, width int) string {
+	if commit.Hash == "" {
+		return colorGraph(commit.Graph)
+	}
 	graph := colorGraph(commit.Graph)
 	hash := commitHashStyle.Render(commit.Hash)
 	styledRefs := commitRefsStyle.Render(commit.Refs)

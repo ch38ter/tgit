@@ -104,9 +104,11 @@ const graphChars = "|*/\\_- "
 
 // parseLine parses a single line of `git log --graph` output in the
 // NUL-separated pretty format, falling back to legacy --oneline parsing for
-// lines without a NUL separator (boundary/decor lines).
-// Returns the parsed CommitRow and true if the line contains a commit,
-// or false if it's a pure graph line (e.g. "|/", "|\").
+// lines without a NUL separator (boundary/decor lines). Pure-graph topology
+// lines (e.g. "|/", "|\") are emitted as graph-only rows (Hash empty) so
+// merge/fork markers survive rendering.
+// Returns the parsed CommitRow and true if the line produced a row,
+// or false for completely empty or unparseable lines.
 func parseLine(line string) (CommitRow, bool) {
 	// Extract graph prefix: leading chars from the graph character set.
 	graphLen := 0
@@ -117,8 +119,11 @@ func parseLine(line string) (CommitRow, bool) {
 	graph := line[:graphLen]
 	rest := line[graphLen:]
 
-	// Pure graph line with no commit.
+	// Pure graph line: carries only topology (fork/merge/lane markers).
 	if rest == "" {
+		if graph != "" {
+			return CommitRow{Graph: graph}, true
+		}
 		return CommitRow{}, false
 	}
 

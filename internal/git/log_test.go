@@ -57,10 +57,16 @@ func TestLogGraph_MultiBranchWithMerge(t *testing.T) {
 		t.Fatalf("expected >= 6 rows, got %d", len(rows))
 	}
 
-	// Verify each row has a non-empty hex hash (length varies with repo size).
+	// Verify each commit row has a non-empty hex hash (length varies with
+	// repo size); graph-only topology rows (fork/merge markers) have no hash.
+	graphOnlyRows := 0
 	for i, row := range rows {
 		if row.Hash == "" {
-			t.Errorf("row %d: hash is empty", i)
+			if row.Graph == "" {
+				t.Errorf("row %d: empty hash and empty graph", i)
+			}
+			graphOnlyRows++
+			continue
 		}
 		if len(row.Hash) < 7 {
 			t.Errorf("row %d: hash length = %d, want >= 7 (hash=%q)", i, len(row.Hash), row.Hash)
@@ -70,6 +76,9 @@ func TestLogGraph_MultiBranchWithMerge(t *testing.T) {
 				t.Errorf("row %d: hash %q contains non-hex char", i, row.Hash)
 			}
 		}
+	}
+	if graphOnlyRows == 0 {
+		t.Error("merge history must contain graph-only topology rows")
 	}
 
 	// Verify at least one row has '*' in graph.
@@ -93,7 +102,7 @@ func TestLogGraph_MultiBranchWithMerge(t *testing.T) {
 				t.Error("merge commit has empty refs (expected HEAD -> main)")
 			}
 		}
-		if row.Author != "Test" {
+		if row.Author != "Test" && row.Hash != "" {
 			t.Errorf("row %q: author = %q, want %q", row.Hash, row.Author, "Test")
 		}
 	}
@@ -330,10 +339,10 @@ func TestParseLineNulFormatAndFallback(t *testing.T) {
 			ok:   true,
 		},
 		{
-			name: "pure graph line",
+			name: "pure graph line emits graph-only row",
 			line: "|/",
-			want: CommitRow{},
-			ok:   false,
+			want: CommitRow{Graph: "|/"},
+			ok:   true,
 		},
 	}
 	for _, tc := range tests {
@@ -346,6 +355,31 @@ func TestParseLineNulFormatAndFallback(t *testing.T) {
 				t.Errorf("row = %+v, want %+v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestParseLineGraphOnlyRows(t *testing.T) {
+	tests := []struct {
+		line string
+		want CommitRow
+		ok   bool
+	}{
+		{"|/", CommitRow{Graph: "|/"}, true},
+		{"| ", CommitRow{Graph: "| "}, true},
+		{"|\\", CommitRow{Graph: "|\\"}, true},
+		{"| | ", CommitRow{Graph: "| | "}, true},
+		{"", CommitRow{}, false},
+		{"zzz", CommitRow{}, false},
+	}
+	for _, tc := range tests {
+		got, ok := parseLine(tc.line)
+		if ok != tc.ok {
+			t.Errorf("parseLine(%q) ok = %v, want %v", tc.line, ok, tc.ok)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("parseLine(%q) = %+v, want %+v", tc.line, got, tc.want)
+		}
 	}
 }
 

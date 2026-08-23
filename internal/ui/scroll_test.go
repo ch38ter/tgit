@@ -45,6 +45,92 @@ func TestBottomPaneScrollsWindow(t *testing.T) {
 	}
 }
 
+func TestNavSkipsGraphOnlyRows(t *testing.T) {
+	m := InitialModel()
+	m.width, m.height = 80, 24
+	m.commits = []git.CommitRow{
+		{Hash: "aaa", Msg: "r0"},
+		{Graph: "|/"},
+		{Hash: "bbb", Msg: "r2"},
+	}
+	m.selectedCommit = 0
+	m.focusedPane = focusCommits
+	m.currentView = "files"
+	m.commitsExhausted = true
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if m.selectedCommit != 2 {
+		t.Fatalf("j from real row must skip graph-only row 1, got %d", m.selectedCommit)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if m.selectedCommit != 0 {
+		t.Fatalf("k must skip back to real row 0, got %d", m.selectedCommit)
+	}
+}
+
+func TestSkipGraphOnlyBoundaries(t *testing.T) {
+	tests := []struct {
+		name string
+		rows []git.CommitRow
+		idx  int
+		dir  int
+		want int
+	}{
+		{"empty slice", nil, 0, 1, 0},
+		{"first graph-only dir+1", []git.CommitRow{{Graph: "|/"}, {Hash: "a"}}, 0, 1, 1},
+		{"last graph-only dir-1", []git.CommitRow{{Hash: "a"}, {Graph: "|/"}}, 1, -1, 0},
+		{"consecutive run forward", []git.CommitRow{{Hash: "a"}, {Graph: "x"}, {Graph: "y"}, {Hash: "b"}}, 1, 1, 3},
+		{"consecutive run backward", []git.CommitRow{{Hash: "a"}, {Graph: "x"}, {Graph: "y"}, {Hash: "b"}}, 2, -1, 0},
+		{"all graph-only falls back", []git.CommitRow{{Graph: "|/"}, {Graph: "| "}}, 0, 1, 0},
+		{"idx beyond bounds clamps", []git.CommitRow{{Hash: "a"}}, 5, 1, 0},
+		{"real row unchanged", []git.CommitRow{{Hash: "a"}, {Hash: "b"}}, 1, -1, 1},
+	}
+	for _, tc := range tests {
+		if got := skipGraphOnly(tc.rows, tc.idx, tc.dir); got != tc.want {
+			t.Errorf("%s: skipGraphOnly(idx=%d,dir=%d) = %d, want %d", tc.name, tc.idx, tc.dir, got, tc.want)
+		}
+	}
+}
+
+func TestRenderCommitLineGraphOnly(t *testing.T) {
+	forceANSI256(t)
+
+	out := renderCommitLine(git.CommitRow{Graph: "|/"}, 60)
+	if want := colorGraph("|/"); out != want {
+		t.Errorf("graph-only row must render as colorGraph(graph):\nout  = %q\nwant = %q", out, want)
+	}
+	if strings.Contains(stripANSI(out), "abc1234") {
+		t.Errorf("graph-only row must not contain hash text: %q", stripANSI(out))
+	}
+}
+
+func TestCountCommits(t *testing.T) {
+	rows := []git.CommitRow{
+		{Hash: "a"}, {Graph: "|/"}, {Hash: "b"}, {Graph: "| "}, {Graph: "|\\"},
+	}
+	if got := countCommits(rows); got != 2 {
+		t.Errorf("countCommits = %d, want 2 (graph-only rows excluded)", got)
+	}
+}
+
+func TestCommitsAppendedMsgKeepsGraphOnlyRows(t *testing.T) {
+	m := InitialModel()
+	m.width, m.height = 80, 24
+	m.commits = []git.CommitRow{{Hash: "aaa"}}
+	m.selectedCommit = 0
+
+	updated, _ := m.Update(commitsAppendedMsg{
+		rows: []git.CommitRow{{Graph: "|/"}, {Hash: "bbb"}},
+	})
+	got := updated.(*model)
+	if len(got.commits) != 3 {
+		t.Fatalf("graph-only rows must append alongside commits, len=%d", len(got.commits))
+	}
+	if got.selectedCommit != 2 {
+		t.Errorf("selection must advance past appended rows onto real commit, got %d", got.selectedCommit)
+	}
+}
+
 func TestLoadMoreAppendsOlderCommits(t *testing.T) {
 	newModel := func() *model {
 		m := InitialModel()
