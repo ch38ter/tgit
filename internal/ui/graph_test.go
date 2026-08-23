@@ -109,6 +109,20 @@ func TestColorGraphMergeDecrementsColumn(t *testing.T) {
 	}
 }
 
+func TestRenderCommitLineAuthorSuffix(t *testing.T) {
+	forceANSI256(t)
+
+	out := renderCommitLine(git.CommitRow{Graph: "* ", Hash: "abc1234", Msg: "msg", Author: "Chester Cheng"})
+	if !strings.Contains(out, authorStyle.Render("  Chester Cheng")) {
+		t.Errorf("author suffix missing from commit line: %q", out)
+	}
+
+	noAuthor := renderCommitLine(git.CommitRow{Graph: "* ", Hash: "abc1234", Msg: "msg"})
+	if strings.Contains(noAuthor, authorStyle.Render("  ")) {
+		t.Errorf("empty author must not emit suffix: %q", noAuthor)
+	}
+}
+
 func TestRenderCommitLineColoredGraph(t *testing.T) {
 	forceANSI256(t)
 

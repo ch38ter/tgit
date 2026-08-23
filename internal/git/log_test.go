@@ -93,6 +93,9 @@ func TestLogGraph_MultiBranchWithMerge(t *testing.T) {
 				t.Error("merge commit has empty refs (expected HEAD -> main)")
 			}
 		}
+		if row.Author != "Test" {
+			t.Errorf("row %q: author = %q, want %q", row.Hash, row.Author, "Test")
+		}
 	}
 	if !foundMerge {
 		t.Error("merge commit not found in rows")
@@ -134,6 +137,10 @@ func TestLogGraph_MessageWithSpecialChars(t *testing.T) {
 
 	if rows[0].Msg != "fix: handle (parentheses) and *stars* in message" {
 		t.Errorf("unexpected message: %q", rows[0].Msg)
+	}
+
+	if rows[0].Author != "Test" {
+		t.Errorf("author = %q, want %q", rows[0].Author, "Test")
 	}
 
 	// HEAD commit on main always has decorate refs.
@@ -260,6 +267,9 @@ func TestLogGraphAppendAt_SkipAndMax(t *testing.T) {
 	if page[0].Msg != "commit 2" || page[1].Msg != "commit 1" {
 		t.Errorf("page messages mismatch: got %q,%q", page[0].Msg, page[1].Msg)
 	}
+	if page[0].Author != "Test" || page[1].Author != "Test" {
+		t.Errorf("page authors mismatch: got %q,%q", page[0].Author, page[1].Author)
+	}
 
 	exhausted, err := LogGraphAppendAt(dir, 5, 200)
 	if err != nil {
@@ -267,6 +277,75 @@ func TestLogGraphAppendAt_SkipAndMax(t *testing.T) {
 	}
 	if len(exhausted) != 0 {
 		t.Errorf("expected empty page past end, got %d rows", len(exhausted))
+	}
+}
+
+func TestParseLineNulFormatAndFallback(t *testing.T) {
+	tests := []struct {
+		name string
+		line string
+		want CommitRow
+		ok   bool
+	}{
+		{
+			name: "nul format full",
+			line: "* abc1234\x00(HEAD -> master)\x00fix: handle (parens)\x00Chester Cheng",
+			want: CommitRow{Graph: "* ", Hash: "abc1234", Refs: "(HEAD -> master)", Msg: "fix: handle (parens)", Author: "Chester Cheng"},
+			ok:   true,
+		},
+		{
+			name: "nul format no refs chinese author and msg",
+			line: "| * deadbeef\x00\x00修复 中文 消息\x00余晨辉",
+			want: CommitRow{Graph: "| * ", Hash: "deadbeef", Msg: "修复 中文 消息", Author: "余晨辉"},
+			ok:   true,
+		},
+		{
+			name: "nul format missing author field",
+			line: "* abc1234\x00\x00msg only\x00",
+			want: CommitRow{Graph: "* ", Hash: "abc1234", Msg: "msg only", Author: ""},
+			ok:   true,
+		},
+		{
+			name: "nul format only hash",
+			line: "* abc1234\x00",
+			want: CommitRow{Graph: "* ", Hash: "abc1234"},
+			ok:   true,
+		},
+		{
+			name: "nul format invalid hash rejected",
+			line: "* zzzz1234\x00\x00msg\x00author",
+			want: CommitRow{},
+			ok:   false,
+		},
+		{
+			name: "legacy oneline fallback",
+			line: "* abc1234 fix some message",
+			want: CommitRow{Graph: "* ", Hash: "abc1234", Msg: "fix some message", Author: ""},
+			ok:   true,
+		},
+		{
+			name: "legacy oneline with refs",
+			line: "* abc1234 (HEAD -> master) msg here",
+			want: CommitRow{Graph: "* ", Hash: "abc1234", Refs: "(HEAD -> master)", Msg: "msg here", Author: ""},
+			ok:   true,
+		},
+		{
+			name: "pure graph line",
+			line: "|/",
+			want: CommitRow{},
+			ok:   false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := parseLine(tc.line)
+			if ok != tc.ok {
+				t.Fatalf("ok = %v, want %v", ok, tc.ok)
+			}
+			if got != tc.want {
+				t.Errorf("row = %+v, want %+v", got, tc.want)
+			}
+		})
 	}
 }
 

@@ -66,6 +66,7 @@ var (
 	// Commit row styles
 	commitHashStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("3")) // yellow
 	commitRefsStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("6")) // cyan
+	authorStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 
 	// Diff view styles
 	diffTitleStyle = lipgloss.NewStyle().
@@ -836,11 +837,15 @@ func renderCommitLine(commit git.CommitRow) string {
 	graph := colorGraph(mapGraphChars(commit.Graph))
 	hash := commitHashStyle.Render(commit.Hash)
 	refs := commitRefsStyle.Render(commit.Refs)
+	var author string
+	if commit.Author != "" {
+		author = authorStyle.Render("  " + commit.Author)
+	}
 
 	if commit.Refs != "" {
-		return fmt.Sprintf("%s %s %s %s", graph, hash, refs, commit.Msg)
+		return fmt.Sprintf("%s %s %s %s%s", graph, hash, refs, commit.Msg, author)
 	}
-	return fmt.Sprintf("%s %s %s", graph, hash, commit.Msg)
+	return fmt.Sprintf("%s %s %s%s", graph, hash, commit.Msg, author)
 }
 
 // mapGraphChars keeps git log --graph ASCII characters as-is for terminal compatibility.

@@ -8,18 +8,23 @@ import (
 
 // CommitRow represents a single parsed row from `git log --graph --oneline --decorate`.
 type CommitRow struct {
-	Graph string // ASCII graph prefix (e.g. "* ", "| * ", "|/")
-	Hash  string // Short commit hash (up to 7 hex chars)
-	Refs  string // Decoration string like "(HEAD -> main, tag: v1)", empty if none
-	Msg   string // Commit message
+	Graph  string // ASCII graph prefix (e.g. "* ", "| * ", "|/")
+	Hash   string // Short commit hash (up to 7 hex chars)
+	Refs   string // Decoration string like "(HEAD -> main, tag: v1)", empty if none
+	Msg    string // Commit message
+	Author string // author name from %an, empty if absent
 }
 
-// LogGraph runs `git log --graph --oneline --decorate --all -n <max>` in the
-// current directory and parses the output into CommitRow slices.
+// LogGraph runs `git log --graph --abbrev-commit --decorate --all -n <max>`
+// with a NUL-separated pretty format (%h %d %s %an) in the current directory
+// and parses the output into CommitRow slices.
 // max defaults to 200 if <= 0.
 func LogGraph(max int) ([]CommitRow, error) {
 	return LogGraphAt(".", max)
 }
+
+// logPrettyFormat is the NUL-separated field format: hash, refs, subject, author.
+const logPrettyFormat = "--pretty=format:%h%x00%d%x00%s%x00%an"
 
 // LogGraphAt runs LogGraph in the specified directory.
 func LogGraphAt(dir string, max int) ([]CommitRow, error) {
@@ -27,7 +32,7 @@ func LogGraphAt(dir string, max int) ([]CommitRow, error) {
 		max = 200
 	}
 
-	cmd := exec.Command("git", "log", "--graph", "--oneline", "--decorate", "--all", "-n", strconv.Itoa(max))
+	cmd := exec.Command("git", "log", "--graph", "--abbrev-commit", "--decorate", "--all", logPrettyFormat, "-n", strconv.Itoa(max))
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
@@ -52,8 +57,9 @@ func LogGraphAt(dir string, max int) ([]CommitRow, error) {
 }
 
 // LogGraphAppendAt fetches the next page of history after alreadyLoaded rows,
-// running `git log --skip=<alreadyLoaded> -n <max> --graph --oneline --decorate --all`.
-// Empty stdout (nothing left) yields an empty slice and nil error.
+// running `git log --skip=<alreadyLoaded> -n <max>` with the same NUL-separated
+// pretty format as LogGraphAt. Empty stdout (nothing left) yields an empty
+// slice and nil error.
 //
 // git draws each page's ASCII graph standalone, so an appended page's
 // connector glyphs may not visually continue the previous page's graph
@@ -69,7 +75,7 @@ func LogGraphAppendAt(dir string, alreadyLoaded int, max int) ([]CommitRow, erro
 	cmd := exec.Command("git", "log",
 		"--skip="+strconv.Itoa(alreadyLoaded),
 		"-n", strconv.Itoa(max),
-		"--graph", "--oneline", "--decorate", "--all")
+		"--graph", "--abbrev-commit", "--decorate", "--all", logPrettyFormat)
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
@@ -96,7 +102,9 @@ func LogGraphAppendAt(dir string, alreadyLoaded int, max int) ([]CommitRow, erro
 // graphChars is the set of characters that can appear in the ASCII graph prefix.
 const graphChars = "|*/\\_- "
 
-// parseLine parses a single line of `git log --graph --oneline --decorate` output.
+// parseLine parses a single line of `git log --graph` output in the
+// NUL-separated pretty format, falling back to legacy --oneline parsing for
+// lines without a NUL separator (boundary/decor lines).
 // Returns the parsed CommitRow and true if the line contains a commit,
 // or false if it's a pure graph line (e.g. "|/", "|\").
 func parseLine(line string) (CommitRow, bool) {
@@ -114,6 +122,39 @@ func parseLine(line string) (CommitRow, bool) {
 		return CommitRow{}, false
 	}
 
+	if strings.Contains(rest, "\x00") {
+		return parseNulFields(graph, rest)
+	}
+
+	return parseLegacyLine(graph, rest)
+}
+
+func parseNulFields(graph, rest string) (CommitRow, bool) {
+	fields := strings.SplitN(rest, "\x00", 4)
+	for len(fields) < 4 {
+		fields = append(fields, "")
+	}
+
+	hash := fields[0]
+	if hash == "" {
+		return CommitRow{}, false
+	}
+	for i := 0; i < len(hash); i++ {
+		if !isHexChar(hash[i]) {
+			return CommitRow{}, false
+		}
+	}
+
+	return CommitRow{
+		Graph:  graph,
+		Hash:   hash,
+		Refs:   fields[1],
+		Msg:    fields[2],
+		Author: fields[3],
+	}, true
+}
+
+func parseLegacyLine(graph, rest string) (CommitRow, bool) {
 	// Extract hash: all consecutive hex characters. The abbreviated length is
 	// NOT fixed at 7 — git auto-lengthens it as the repository grows, so a
 	// large repo can emit 9+ chars. The hash is always followed by a space.
