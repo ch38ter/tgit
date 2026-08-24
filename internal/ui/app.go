@@ -107,6 +107,8 @@ type model struct {
 	toplevel      string
 	changes       []git.FileChange
 	commits       []git.CommitRow
+	graphCells    []string   // per-commit lane rendering, parallel to commits
+	laneOpen      [][]string // open lane state carried across pages
 	selectedFile   int
 	selectedCommit int
 	focusedPane    focusedPane
@@ -277,7 +279,7 @@ func loadRepoData() tea.Msg {
 		return changes[i].Path < changes[j].Path
 	})
 
-	commits, err := git.LogGraph(200)
+	commits, err := git.LogCommitRowsAt(".", 0, 200)
 	if err != nil {
 		commits = nil
 	}
@@ -333,25 +335,24 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 					}
 				}
-			case focusCommits:
-				if len(m.commits) > 0 {
-					if m.selectedCommit < 0 {
-						m.selectedCommit = skipGraphOnly(m.commits, 0, 1)
-					} else {
-						next := m.selectedCommit + 1
-						if next >= len(m.commits) {
-							if !m.commitsExhausted {
-								m.selectedCommit = len(m.commits) - 1
-								return m, m.loadMoreCommits()
-							}
-							m.selectedCommit = 0
-						} else {
-							m.selectedCommit = next
+		case focusCommits:
+			if len(m.commits) > 0 {
+				if m.selectedCommit < 0 {
+					m.selectedCommit = 0
+				} else {
+					next := m.selectedCommit + 1
+					if next >= len(m.commits) {
+						if !m.commitsExhausted {
+							m.selectedCommit = len(m.commits) - 1
+							return m, m.loadMoreCommits()
 						}
-						m.selectedCommit = skipGraphOnly(m.commits, m.selectedCommit, 1)
+						m.selectedCommit = 0
+					} else {
+						m.selectedCommit = next
 					}
 				}
 			}
+		}
 		case "k", "up":
 			if m.currentView == "diff" {
 				var cmd tea.Cmd
@@ -370,21 +371,20 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 					}
 				}
-			case focusCommits:
-				if len(m.commits) > 0 {
-					if m.selectedCommit < 0 {
-						m.selectedCommit = 0
+		case focusCommits:
+			if len(m.commits) > 0 {
+				if m.selectedCommit < 0 {
+					m.selectedCommit = 0
+				} else {
+					next := m.selectedCommit - 1
+					if next < 0 {
+						m.selectedCommit = len(m.commits) - 1
 					} else {
-						next := m.selectedCommit - 1
-						if next < 0 {
-							m.selectedCommit = len(m.commits) - 1
-						} else {
-							m.selectedCommit = next
-						}
-						m.selectedCommit = skipGraphOnly(m.commits, m.selectedCommit, -1)
+						m.selectedCommit = next
 					}
 				}
 			}
+		}
 		case "enter":
 			if m.currentView != "files" {
 				return m, nil
@@ -464,7 +464,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if rel >= len(m.commits) {
 					rel = len(m.commits) - 1
 				}
-				m.selectedCommit = skipGraphOnly(m.commits, rel, 1)
+				m.selectedCommit = rel
 			}
 		}
 	case tea.WindowSizeMsg:
@@ -480,6 +480,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.userName = msg.info.UserName
 		m.changes = msg.changes
 		m.commits = msg.commits
+		m.graphCells, m.laneOpen = buildLanes(msg.commits, nil)
 		m.commitsExhausted = false
 		if len(m.changes) == 0 {
 			m.selectedFile = -1
@@ -491,31 +492,26 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if m.selectedCommit >= len(m.commits) {
 			m.selectedCommit = len(m.commits) - 1
 		}
-		if m.selectedCommit >= 0 {
-			m.selectedCommit = skipGraphOnly(m.commits, m.selectedCommit, 1)
-		}
 	case reloadMsg:
 		return m, tea.Batch(m.reload(), m.waitForReload())
 	case commitsAppendedMsg:
 		existing := make(map[string]bool, len(m.commits))
 		for _, c := range m.commits {
-			existing[c.Hash] = true
+			existing[c.FullHash] = true
 		}
-		appended := 0
+		var appendedRows []git.CommitRow
 		for _, r := range msg.rows {
-			if r.Hash == "" {
-				m.commits = append(m.commits, r)
+			if existing[r.FullHash] {
 				continue
 			}
-			if existing[r.Hash] {
-				continue
-			}
-			m.commits = append(m.commits, r)
-			existing[r.Hash] = true
-			appended++
+			existing[r.FullHash] = true
+			appendedRows = append(appendedRows, r)
 		}
-		m.selectedCommit += appended
-		m.selectedCommit = skipGraphOnly(m.commits, m.selectedCommit, 1)
+		m.commits = append(m.commits, appendedRows...)
+		var newCells []string
+		newCells, m.laneOpen = buildLanes(appendedRows, m.laneOpen)
+		m.graphCells = append(m.graphCells, newCells...)
+		m.selectedCommit += len(appendedRows)
 		if msg.exhausted || len(msg.rows) < 200 {
 			m.commitsExhausted = true
 		}
@@ -661,50 +657,10 @@ func (m *model) renderHeader() string {
 	return strings.Join([]string{line1, line2, line3}, "\n")
 }
 
-// skipGraphOnly returns the nearest index at or after idx walking dir whose
-// row is a real commit (Hash != ""); on leaving the bounds it reverses
-// direction from idx. Returns idx unchanged when no commit row exists.
-func skipGraphOnly(rows []git.CommitRow, idx int, dir int) int {
-	if len(rows) == 0 {
-		return idx
-	}
-	if idx < 0 {
-		idx = 0
-	}
-	if idx >= len(rows) {
-		idx = len(rows) - 1
-	}
-	i := idx
-	for i >= 0 && i < len(rows) && rows[i].Hash == "" {
-		i += dir
-	}
-	if i >= 0 && i < len(rows) {
-		return i
-	}
-	i = idx - dir
-	for i >= 0 && i < len(rows) && rows[i].Hash == "" {
-		i -= dir
-	}
-	if i >= 0 && i < len(rows) {
-		return i
-	}
-	return idx
-}
-
-func countCommits(rows []git.CommitRow) int {
-	n := 0
-	for _, r := range rows {
-		if r.Hash != "" {
-			n++
-		}
-	}
-	return n
-}
-
 func (m *model) loadMoreCommits() tea.Cmd {
-	loaded := countCommits(m.commits)
+	loaded := len(m.commits)
 	return func() tea.Msg {
-		rows, err := git.LogGraphAppendAt(".", loaded, 200)
+		rows, err := git.LogCommitRowsAt(".", loaded, 200)
 		if err != nil {
 			return commitsAppendedMsg{exhausted: true}
 		}
@@ -868,19 +824,13 @@ func (m *model) renderBottomSized(visibleRows int) string {
 		end = start + visibleRows
 	}
 
-	ctxStart := start - 1
-	if ctxStart < 0 {
-		ctxStart = 0
-	}
-	ctxEnd := end + 1
-	if ctxEnd > len(m.commits) {
-		ctxEnd = len(m.commits)
-	}
-	filled := synthesizeGraphLanes(m.commits[ctxStart:ctxEnd])
-
 	var lines []string
 	for i := start; i < end; i++ {
-		line := renderCommitLineStyled(m.commits[i], filled[i-ctxStart], contentWidth)
+		var cells string
+		if i < len(m.graphCells) {
+			cells = m.graphCells[i]
+		}
+		line := renderCommitLineStyled(m.commits[i], cells, contentWidth)
 		// truncate reserves tail cells even for fitting rows, so only invoke
 		// it when the row actually overflows (same counter as truncate).
 		if ansi.PrintableRuneWidth(line) > contentWidth {
@@ -900,21 +850,12 @@ func (m *model) renderBottomSized(visibleRows int) string {
 	return strings.Join(lines, "\n")
 }
 
-// renderCommitLine renders a single commit row with graph, hash, refs, and
-// message. With refs present and room to spare, refs right-align at width;
-// otherwise they degrade to inline after the hash. Truncation of the whole
-// row remains the caller's job.
-func renderCommitLine(commit git.CommitRow, width int) string {
-	return renderCommitLineStyled(commit, colorGraph(commit.Graph), width)
-}
-
-// renderCommitLineStyled takes a pre-styled graph segment (e.g. from
-// synthesizeGraphLanes); styledGraph must not pass through colorGraph again —
-// its embedded fillers would shift the column counter and recolor dots.
-func renderCommitLineStyled(commit git.CommitRow, styledGraph string, width int) string {
-	if commit.Hash == "" {
-		return styledGraph
-	}
+// renderCommitLineStyled renders a single commit row with lane cells, hash,
+// refs, and message. cells is the pre-styled graph segment from buildLanes.
+// With refs present and room to spare, refs right-align at width; otherwise
+// they degrade to inline after the hash. Truncation of the whole row remains
+// the caller's job.
+func renderCommitLineStyled(commit git.CommitRow, cells string, width int) string {
 	hash := commitHashStyle.Render(commit.Hash)
 	styledRefs := commitRefsStyle.Render(commit.Refs)
 	var author string
@@ -923,37 +864,13 @@ func renderCommitLineStyled(commit git.CommitRow, styledGraph string, width int)
 	}
 
 	if commit.Refs == "" {
-		return fmt.Sprintf("%s %s %s%s", styledGraph, hash, commit.Msg, author)
+		return fmt.Sprintf("%s %s %s%s", cells, hash, commit.Msg, author)
 	}
 
-	left := fmt.Sprintf("%s %s %s", styledGraph, hash, commit.Msg) + author
+	left := fmt.Sprintf("%s %s %s", cells, hash, commit.Msg) + author
 	gap := width - lipgloss.Width(left) - lipgloss.Width(styledRefs)
 	if gap >= 1 {
 		return left + strings.Repeat(" ", gap) + styledRefs
 	}
-	return fmt.Sprintf("%s %s %s %s%s", styledGraph, hash, styledRefs, commit.Msg, author)
-}
-
-// unicodeGlyphs maps ASCII graph characters to their display glyphs.
-var unicodeGlyphs = map[rune]string{
-	'|':  "│",
-	'*':  "●",
-	'/':  "╯",
-	'\\': "╰",
-	'_':  "─",
-	'-':  "─",
-}
-
-// asciiFallback renders every graph character as itself:
-// var asciiFallback = map[rune]string{
-// 	'|': "|", '*': "*", '/': "/", '\\': "\\", '_': "_", '-': "-",
-// }
-//
-// To roll back (e.g. if ● renders double-width in the user's font, the
-// b7fcaf5 lesson), swap the returned table below to asciiFallback.
-func mapGraphChars(r rune) string {
-	if g, ok := unicodeGlyphs[r]; ok {
-		return g
-	}
-	return string(r)
+	return fmt.Sprintf("%s %s %s %s%s", cells, hash, styledRefs, commit.Msg, author)
 }

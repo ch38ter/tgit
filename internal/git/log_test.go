@@ -1,7 +1,6 @@
 package git
 
 import (
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,20 +8,22 @@ import (
 	"testing"
 )
 
-func TestLogGraph_MultiBranchWithMerge(t *testing.T) {
+// setupMergeRepo builds a repo with a branch + merge:
+//
+//	main:   initial -> second -> third -> merge(feature)
+//	feature: branched from initial, two commits.
+func setupMergeRepo(t *testing.T) string {
+	t.Helper()
 	dir := t.TempDir()
 
-	// Initialize a git repo with a default branch.
 	gitRun(t, dir, "init", "-b", "main")
 	gitRun(t, dir, "config", "user.email", "test@example.com")
 	gitRun(t, dir, "config", "user.name", "Test")
 
-	// Initial commit.
 	writeFile(t, dir, "file.txt", "initial")
 	gitRun(t, dir, "add", ".")
 	gitRun(t, dir, "commit", "-m", "initial commit")
 
-	// Two more commits on main.
 	writeFile(t, dir, "file.txt", "main work")
 	gitRun(t, dir, "add", ".")
 	gitRun(t, dir, "commit", "-m", "second commit")
@@ -31,10 +32,8 @@ func TestLogGraph_MultiBranchWithMerge(t *testing.T) {
 	gitRun(t, dir, "add", ".")
 	gitRun(t, dir, "commit", "-m", "third commit")
 
-	// Create feature branch from the initial commit.
 	gitRun(t, dir, "checkout", "-b", "feature", "HEAD~2")
 
-	// Two commits on feature.
 	writeFile(t, dir, "feature.txt", "feature work")
 	gitRun(t, dir, "add", ".")
 	gitRun(t, dir, "commit", "-m", "feature commit 1")
@@ -43,253 +42,136 @@ func TestLogGraph_MultiBranchWithMerge(t *testing.T) {
 	gitRun(t, dir, "add", ".")
 	gitRun(t, dir, "commit", "-m", "feature commit 2")
 
-	// Go back to main and merge feature.
 	gitRun(t, dir, "checkout", "main")
 	gitRun(t, dir, "merge", "feature", "-m", "merge feature into main")
 
-	// Run LogGraphAt.
-	rows, err := LogGraphAt(dir, 200)
+	return dir
+}
+
+func is40Hex(s string) bool {
+	if len(s) != 40 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if !isHexChar(s[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func TestLogCommitRowsAt_MergeRepo(t *testing.T) {
+	dir := setupMergeRepo(t)
+
+	rows, err := LogCommitRowsAt(dir, 0, 200)
 	if err != nil {
-		t.Fatalf("LogGraphAt error: %v", err)
+		t.Fatalf("LogCommitRowsAt error: %v", err)
+	}
+	if len(rows) != 6 {
+		t.Fatalf("expected 6 rows (5 commits + 1 merge), got %d", len(rows))
 	}
 
-	if len(rows) < 6 {
-		t.Fatalf("expected >= 6 rows, got %d", len(rows))
+	byMsg := map[string]CommitRow{}
+	for _, r := range rows {
+		byMsg[r.Msg] = r
 	}
 
-	// Verify each commit row has a non-empty hex hash (length varies with
-	// repo size); graph-only topology rows (fork/merge markers) have no hash.
-	graphOnlyRows := 0
-	for i, row := range rows {
-		if row.Hash == "" {
-			if row.Graph == "" {
-				t.Errorf("row %d: empty hash and empty graph", i)
+	// Every row: full hash is 40-hex and display hash is its prefix.
+	for i, r := range rows {
+		if !is40Hex(r.FullHash) {
+			t.Errorf("row %d (%s): FullHash = %q, want 40 hex chars", i, r.Msg, r.FullHash)
+		}
+		if r.Hash == "" || !strings.HasPrefix(r.FullHash, r.Hash) {
+			t.Errorf("row %d (%s): Hash %q must be a prefix of FullHash %q", i, r.Msg, r.Hash, r.FullHash)
+		}
+		if r.Author != "Test" {
+			t.Errorf("row %d (%s): author = %q, want %q", i, r.Msg, r.Author, "Test")
+		}
+	}
+
+	// Merge commit has exactly 2 parents, both full hashes of real rows.
+	merge := byMsg["merge feature into main"]
+	if len(merge.Parents) != 2 {
+		t.Fatalf("merge parents = %v, want exactly 2 full hashes", merge.Parents)
+	}
+	parentMsgs := map[string]bool{}
+	for _, p := range merge.Parents {
+		found := false
+		for _, r := range rows {
+			if r.FullHash == p {
+				found = true
+				parentMsgs[r.Msg] = true
 			}
-			graphOnlyRows++
-			continue
 		}
-		if len(row.Hash) < 7 {
-			t.Errorf("row %d: hash length = %d, want >= 7 (hash=%q)", i, len(row.Hash), row.Hash)
-		}
-		for _, c := range row.Hash {
-			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
-				t.Errorf("row %d: hash %q contains non-hex char", i, row.Hash)
-			}
+		if !found {
+			t.Errorf("merge parent %q does not match any row's FullHash", p)
 		}
 	}
-	if graphOnlyRows == 0 {
-		t.Error("merge history must contain graph-only topology rows")
+	if !parentMsgs["third commit"] || !parentMsgs["feature commit 2"] {
+		t.Errorf("merge parents must be third commit + feature commit 2, got %v", parentMsgs)
 	}
 
-	// Verify at least one row has '*' in graph.
-	hasStar := false
-	for _, row := range rows {
-		if strings.Contains(row.Graph, "*") {
-			hasStar = true
-			break
-		}
+	// Linear commits have exactly 1 parent; root has none.
+	if got := byMsg["third commit"].Parents; len(got) != 1 || got[0] != byMsg["second commit"].FullHash {
+		t.Errorf("third commit parents = %v, want [%s]", got, byMsg["second commit"].FullHash)
 	}
-	if !hasStar {
-		t.Error("no row has '*' in graph")
+	if got := byMsg["initial commit"].Parents; len(got) != 0 {
+		t.Errorf("root commit parents = %v, want empty", got)
 	}
 
-	// Verify merge commit is present and has refs.
-	foundMerge := false
-	for _, row := range rows {
-		if row.Msg == "merge feature into main" {
-			foundMerge = true
-			if row.Refs == "" {
-				t.Error("merge commit has empty refs (expected HEAD -> main)")
-			}
-		}
-		if row.Author != "Test" && row.Hash != "" {
-			t.Errorf("row %q: author = %q, want %q", row.Hash, row.Author, "Test")
-		}
+	// Refs preserved: HEAD -> main on the merge, feature branch on its tip.
+	if !strings.Contains(merge.Refs, "HEAD -> main") {
+		t.Errorf("merge refs = %q, want to contain HEAD -> main", merge.Refs)
 	}
-	if !foundMerge {
-		t.Error("merge commit not found in rows")
+	if refs := byMsg["feature commit 2"].Refs; !strings.Contains(refs, "feature") {
+		t.Errorf("feature tip refs = %q, want to contain feature", refs)
 	}
 }
 
-func TestLogGraph_EmptyRepo(t *testing.T) {
-	dir := t.TempDir()
-	gitRun(t, dir, "init", "-b", "main")
+func TestLogCommitRowsAt_SkipAndMaxPaging(t *testing.T) {
+	dir := setupMergeRepo(t)
 
-	rows, err := LogGraphAt(dir, 200)
+	all, err := LogCommitRowsAt(dir, 0, 200)
 	if err != nil {
-		t.Fatalf("LogGraphAt error: %v", err)
+		t.Fatalf("full page error: %v", err)
 	}
 
-	if len(rows) != 0 {
-		t.Fatalf("expected 0 rows, got %d", len(rows))
-	}
-}
-
-func TestLogGraph_MessageWithSpecialChars(t *testing.T) {
-	dir := t.TempDir()
-	gitRun(t, dir, "init", "-b", "main")
-	gitRun(t, dir, "config", "user.email", "test@example.com")
-	gitRun(t, dir, "config", "user.name", "Test")
-
-	writeFile(t, dir, "file.txt", "content")
-	gitRun(t, dir, "add", ".")
-	gitRun(t, dir, "commit", "-m", "fix: handle (parentheses) and *stars* in message")
-
-	rows, err := LogGraphAt(dir, 200)
+	page, err := LogCommitRowsAt(dir, 2, 2)
 	if err != nil {
-		t.Fatalf("LogGraphAt error: %v", err)
-	}
-
-	if len(rows) != 1 {
-		t.Fatalf("expected 1 row, got %d", len(rows))
-	}
-
-	if rows[0].Msg != "fix: handle (parentheses) and *stars* in message" {
-		t.Errorf("unexpected message: %q", rows[0].Msg)
-	}
-
-	if rows[0].Author != "Test" {
-		t.Errorf("author = %q, want %q", rows[0].Author, "Test")
-	}
-
-	// HEAD commit on main always has decorate refs.
-	if !strings.Contains(rows[0].Refs, "HEAD -> main") {
-		t.Errorf("expected refs to contain HEAD -> main, got %q", rows[0].Refs)
-	}
-}
-
-func TestLogGraph_DefaultMax(t *testing.T) {
-	dir := t.TempDir()
-	gitRun(t, dir, "init", "-b", "main")
-	gitRun(t, dir, "config", "user.email", "test@example.com")
-	gitRun(t, dir, "config", "user.name", "Test")
-
-	writeFile(t, dir, "file.txt", "content")
-	gitRun(t, dir, "add", ".")
-	gitRun(t, dir, "commit", "-m", "test commit")
-
-	// max=0 should use default (200).
-	rows, err := LogGraphAt(dir, 0)
-	if err != nil {
-		t.Fatalf("LogGraphAt error: %v", err)
-	}
-
-	if len(rows) != 1 {
-		t.Fatalf("expected 1 row, got %d", len(rows))
-	}
-}
-
-func TestLogGraph_LongAbbreviatedHash(t *testing.T) {
-	dir := t.TempDir()
-	gitRun(t, dir, "init", "-b", "main")
-	gitRun(t, dir, "config", "user.email", "test@example.com")
-	gitRun(t, dir, "config", "user.name", "Test")
-	// Force a long abbreviation, like large repos emit automatically.
-	gitRun(t, dir, "config", "core.abbrev", "12")
-
-	writeFile(t, dir, "file.txt", "content")
-	gitRun(t, dir, "add", ".")
-	gitRun(t, dir, "commit", "-m", "commit with a real message")
-
-	rows, err := LogGraphAt(dir, 200)
-	if err != nil {
-		t.Fatalf("LogGraphAt error: %v", err)
-	}
-
-	if len(rows) != 1 {
-		t.Fatalf("expected 1 row, got %d", len(rows))
-	}
-
-	if len(rows[0].Hash) != 12 {
-		t.Errorf("expected 12-char hash, got %q (len %d)", rows[0].Hash, len(rows[0].Hash))
-	}
-	if rows[0].Msg != "commit with a real message" {
-		t.Errorf("expected message to survive long-hash parsing, got %q", rows[0].Msg)
-	}
-	if !strings.Contains(rows[0].Refs, "HEAD -> main") {
-		t.Errorf("expected refs to survive long-hash parsing, got %q", rows[0].Refs)
-	}
-}
-
-func TestLogGraph_CurrentDirectory(t *testing.T) {
-	dir := t.TempDir()
-	gitRun(t, dir, "init", "-b", "main")
-	gitRun(t, dir, "config", "user.email", "test@example.com")
-	gitRun(t, dir, "config", "user.name", "Test")
-
-	writeFile(t, dir, "file.txt", "content")
-	gitRun(t, dir, "add", ".")
-	gitRun(t, dir, "commit", "-m", "test commit")
-
-	// Change to the test repo directory.
-	origDir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd: %v", err)
-	}
-	defer os.Chdir(origDir)
-	if err := os.Chdir(dir); err != nil {
-		t.Fatalf("Chdir: %v", err)
-	}
-
-	// LogGraph (no dir arg) should use ".".
-	rows, err := LogGraph(200)
-	if err != nil {
-		t.Fatalf("LogGraph error: %v", err)
-	}
-
-	if len(rows) != 1 {
-		t.Fatalf("expected 1 row, got %d", len(rows))
-	}
-}
-
-func TestLogGraphAppendAt_SkipAndMax(t *testing.T) {
-	dir := t.TempDir()
-	gitRun(t, dir, "init", "-b", "main")
-	gitRun(t, dir, "config", "user.email", "test@example.com")
-	gitRun(t, dir, "config", "user.name", "Test")
-
-	for i := 1; i <= 5; i++ {
-		writeFile(t, dir, "file.txt", fmt.Sprintf("content %d", i))
-		gitRun(t, dir, "add", ".")
-		gitRun(t, dir, "commit", "-m", fmt.Sprintf("commit %d", i))
-	}
-
-	all, err := LogGraphAt(dir, 200)
-	if err != nil {
-		t.Fatalf("LogGraphAt error: %v", err)
-	}
-	if len(all) != 5 {
-		t.Fatalf("expected 5 rows, got %d", len(all))
-	}
-
-	page, err := LogGraphAppendAt(dir, 3, 2)
-	if err != nil {
-		t.Fatalf("LogGraphAppendAt error: %v", err)
+		t.Fatalf("paged error: %v", err)
 	}
 	if len(page) != 2 {
-		t.Fatalf("expected exactly 2 rows (skip=3,max=2), got %d", len(page))
+		t.Fatalf("expected exactly 2 rows (skip=2,max=2), got %d", len(page))
 	}
-	if page[0].Hash != all[3].Hash || page[1].Hash != all[4].Hash {
+	if page[0].FullHash != all[2].FullHash || page[1].FullHash != all[3].FullHash {
 		t.Errorf("page hashes mismatch: got %s,%s want %s,%s",
-			page[0].Hash, page[1].Hash, all[3].Hash, all[4].Hash)
-	}
-	if page[0].Msg != "commit 2" || page[1].Msg != "commit 1" {
-		t.Errorf("page messages mismatch: got %q,%q", page[0].Msg, page[1].Msg)
-	}
-	if page[0].Author != "Test" || page[1].Author != "Test" {
-		t.Errorf("page authors mismatch: got %q,%q", page[0].Author, page[1].Author)
+			page[0].FullHash, page[1].FullHash, all[2].FullHash, all[3].FullHash)
 	}
 
-	exhausted, err := LogGraphAppendAt(dir, 5, 200)
+	exhausted, err := LogCommitRowsAt(dir, 6, 200)
 	if err != nil {
-		t.Fatalf("LogGraphAppendAt past end error: %v", err)
+		t.Fatalf("past-end error: %v", err)
 	}
 	if len(exhausted) != 0 {
 		t.Errorf("expected empty page past end, got %d rows", len(exhausted))
 	}
 }
 
-func TestParseLineNulFormatAndFallback(t *testing.T) {
+func TestLogCommitRowsAt_EmptyRepo(t *testing.T) {
+	dir := t.TempDir()
+	gitRun(t, dir, "init", "-b", "main")
+
+	rows, err := LogCommitRowsAt(dir, 0, 200)
+	if err != nil {
+		t.Fatalf("empty repo must degrade silently, got error: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("expected 0 rows, got %d", len(rows))
+	}
+}
+
+func TestParseCommitLine(t *testing.T) {
+	const full = "d12d6e809326a83140f4c43eec254c01bbfbe1b0"
 	tests := []struct {
 		name string
 		line string
@@ -297,89 +179,56 @@ func TestParseLineNulFormatAndFallback(t *testing.T) {
 		ok   bool
 	}{
 		{
-			name: "nul format full",
-			line: "* abc1234\x00(HEAD -> master)\x00fix: handle (parens)\x00Chester Cheng",
-			want: CommitRow{Graph: "* ", Hash: "abc1234", Refs: "(HEAD -> master)", Msg: "fix: handle (parens)", Author: "Chester Cheng"},
+			name: "valid six fields with refs",
+			line: "d12d6e8\x00" + full + "\x00parent1 parent2\x00 (HEAD -> main)\x00merge feat2\x00Chester",
+			want: CommitRow{Hash: "d12d6e8", FullHash: full, Parents: []string{"parent1", "parent2"}, Refs: "(HEAD -> main)", Msg: "merge feat2", Author: "Chester"},
 			ok:   true,
 		},
 		{
-			name: "nul format no refs chinese author and msg",
-			line: "| * deadbeef\x00\x00修复 中文 消息\x00余晨辉",
-			want: CommitRow{Graph: "| * ", Hash: "deadbeef", Msg: "修复 中文 消息", Author: "余晨辉"},
+			name: "root commit has no parents",
+			line: "abc1234\x00" + strings.Repeat("a", 40) + "\x00\x00\x00root\x00A",
+			want: CommitRow{Hash: "abc1234", FullHash: strings.Repeat("a", 40), Parents: []string{}, Msg: "root", Author: "A"},
 			ok:   true,
 		},
 		{
-			name: "nul format missing author field",
-			line: "* abc1234\x00\x00msg only\x00",
-			want: CommitRow{Graph: "* ", Hash: "abc1234", Msg: "msg only", Author: ""},
+			name: "octopus merge three parents",
+			line: "abc1234\x00" + strings.Repeat("b", 40) + "\x00p1 p2 p3\x00\x00octopus\x00A",
+			want: CommitRow{Hash: "abc1234", FullHash: strings.Repeat("b", 40), Parents: []string{"p1", "p2", "p3"}, Msg: "octopus", Author: "A"},
 			ok:   true,
 		},
 		{
-			name: "nul format only hash",
-			line: "* abc1234\x00",
-			want: CommitRow{Graph: "* ", Hash: "abc1234"},
-			ok:   true,
-		},
-		{
-			name: "nul format invalid hash rejected",
-			line: "* zzzz1234\x00\x00msg\x00author",
-			want: CommitRow{},
+			name: "too few fields rejected",
+			line: "abc1234\x00" + full + "\x00p\x00refs",
 			ok:   false,
 		},
 		{
-			name: "legacy oneline fallback",
-			line: "* abc1234 fix some message",
-			want: CommitRow{Graph: "* ", Hash: "abc1234", Msg: "fix some message", Author: ""},
-			ok:   true,
+			name: "non-hex abbrev rejected",
+			line: "zzz1234\x00" + full + "\x00\x00\x00msg\x00A",
+			ok:   false,
 		},
 		{
-			name: "legacy oneline with refs",
-			line: "* abc1234 (HEAD -> master) msg here",
-			want: CommitRow{Graph: "* ", Hash: "abc1234", Refs: "(HEAD -> master)", Msg: "msg here", Author: ""},
-			ok:   true,
+			name: "short full hash rejected",
+			line: "abc1234\x00abcd\x00\x00\x00msg\x00A",
+			ok:   false,
 		},
 		{
-			name: "pure graph line emits graph-only row",
-			line: "|/",
-			want: CommitRow{Graph: "|/"},
-			ok:   true,
+			name: "non-hex full hash rejected",
+			line: "abc1234\x00" + strings.Repeat("g", 40) + "\x00\x00\x00msg\x00A",
+			ok:   false,
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, ok := parseLine(tc.line)
+			got, ok := parseCommitLine(tc.line)
 			if ok != tc.ok {
 				t.Fatalf("ok = %v, want %v", ok, tc.ok)
 			}
-			if got != tc.want {
+			if got.Hash != tc.want.Hash || got.FullHash != tc.want.FullHash ||
+				strings.Join(got.Parents, ",") != strings.Join(tc.want.Parents, ",") ||
+				got.Refs != tc.want.Refs || got.Msg != tc.want.Msg || got.Author != tc.want.Author {
 				t.Errorf("row = %+v, want %+v", got, tc.want)
 			}
 		})
-	}
-}
-
-func TestParseLineGraphOnlyRows(t *testing.T) {
-	tests := []struct {
-		line string
-		want CommitRow
-		ok   bool
-	}{
-		{"|/", CommitRow{Graph: "|/"}, true},
-		{"| ", CommitRow{Graph: "| "}, true},
-		{"|\\", CommitRow{Graph: "|\\"}, true},
-		{"| | ", CommitRow{Graph: "| | "}, true},
-		{"", CommitRow{}, false},
-		{"zzz", CommitRow{}, false},
-	}
-	for _, tc := range tests {
-		got, ok := parseLine(tc.line)
-		if ok != tc.ok {
-			t.Errorf("parseLine(%q) ok = %v, want %v", tc.line, ok, tc.ok)
-			continue
-		}
-		if got != tc.want {
-			t.Errorf("parseLine(%q) = %+v, want %+v", tc.line, got, tc.want)
-		}
 	}
 }
 
