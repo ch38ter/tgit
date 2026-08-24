@@ -144,7 +144,11 @@ func buildLaneRow(row git.CommitRow, lanes [][]string) (string, [][]string) {
 			grid[j] = " "
 		}
 	}
-	grid[L] = graphDotStyles[L%len(graphDotStyles)].Render("●")
+	if len(row.Parents) > 1 {
+		grid[L] = graphDotStyles[L%len(graphDotStyles)].Render("◉")
+	} else {
+		grid[L] = graphDotStyles[L%len(graphDotStyles)].Render("●")
+	}
 
 	// Bridges fill only empty/vertical slots; a curve pinned by an earlier
 	// connection is never overwritten — octopus/multi-join arcs share the

@@ -22,7 +22,7 @@ func laneFixture(msg, fullHash string, parents ...string) git.CommitRow {
 func dotCol(t *testing.T, cell string) int {
 	t.Helper()
 	for i, r := range []rune(stripANSI(cell)) {
-		if r == '●' {
+		if r == '●' || r == '◉' {
 			return i
 		}
 	}
@@ -84,7 +84,7 @@ func TestBuildLanesForkAndMerge(t *testing.T) {
 	// Merge row must carry a connection into the second-parent lane, and the
 	// convergence row (fork B) must carry the joining curve — neither may be
 	// a bare dot.
-	if strings.HasPrefix(stripANSI(cells[0]), "● ") || stripANSI(cells[0]) == "●" {
+	if strings.HasPrefix(stripANSI(cells[0]), "◉ ") || stripANSI(cells[0]) == "◉" {
 		t.Errorf("merge row must connect to the second-parent lane, got %q", stripANSI(cells[0]))
 	}
 	if stripANSI(cells[4]) == "●" {
@@ -190,8 +190,8 @@ func TestBuildLanesOctopusFanout(t *testing.T) {
 
 	// Every extra parent gets its own start curve leaving the dot; no
 	// bridge may degrade them.
-	if got := stripANSI(cells[0]); got != "●╮╮" {
-		t.Errorf("octopus row must fan out as ●╮╮, got %q", got)
+	if got := stripANSI(cells[0]); got != "◉╮╮" {
+		t.Errorf("octopus row must fan out as ◉╮╮, got %q", got)
 	}
 }
 
