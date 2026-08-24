@@ -63,7 +63,7 @@ func is40Hex(s string) bool {
 func TestLogCommitRowsAt_MergeRepo(t *testing.T) {
 	dir := setupMergeRepo(t)
 
-	rows, err := LogCommitRowsAt(dir, 0, 200)
+	rows, err := LogCommitRowsAt(dir, "HEAD", 0, 200)
 	if err != nil {
 		t.Fatalf("LogCommitRowsAt error: %v", err)
 	}
@@ -131,12 +131,12 @@ func TestLogCommitRowsAt_MergeRepo(t *testing.T) {
 func TestLogCommitRowsAt_SkipAndMaxPaging(t *testing.T) {
 	dir := setupMergeRepo(t)
 
-	all, err := LogCommitRowsAt(dir, 0, 200)
+	all, err := LogCommitRowsAt(dir, "HEAD", 0, 200)
 	if err != nil {
 		t.Fatalf("full page error: %v", err)
 	}
 
-	page, err := LogCommitRowsAt(dir, 2, 2)
+	page, err := LogCommitRowsAt(dir, "HEAD", 2, 2)
 	if err != nil {
 		t.Fatalf("paged error: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestLogCommitRowsAt_SkipAndMaxPaging(t *testing.T) {
 			page[0].FullHash, page[1].FullHash, all[2].FullHash, all[3].FullHash)
 	}
 
-	exhausted, err := LogCommitRowsAt(dir, 6, 200)
+	exhausted, err := LogCommitRowsAt(dir, "HEAD", 6, 200)
 	if err != nil {
 		t.Fatalf("past-end error: %v", err)
 	}
@@ -161,12 +161,82 @@ func TestLogCommitRowsAt_EmptyRepo(t *testing.T) {
 	dir := t.TempDir()
 	gitRun(t, dir, "init", "-b", "main")
 
-	rows, err := LogCommitRowsAt(dir, 0, 200)
+	rows, err := LogCommitRowsAt(dir, "HEAD", 0, 200)
 	if err != nil {
 		t.Fatalf("empty repo must degrade silently, got error: %v", err)
 	}
 	if len(rows) != 0 {
 		t.Fatalf("expected 0 rows, got %d", len(rows))
+	}
+}
+
+func setupTwoBranchRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	gitRun(t, dir, "init", "-b", "main")
+	gitRun(t, dir, "config", "user.email", "test@example.com")
+	gitRun(t, dir, "config", "user.name", "Test")
+
+	writeFile(t, dir, "f.txt", "base")
+	gitRun(t, dir, "add", ".")
+	gitRun(t, dir, "commit", "-m", "base")
+
+	gitRun(t, dir, "checkout", "-b", "side")
+	writeFile(t, dir, "s.txt", "side")
+	gitRun(t, dir, "add", ".")
+	gitRun(t, dir, "commit", "-m", "side work")
+
+	gitRun(t, dir, "checkout", "main")
+	writeFile(t, dir, "m.txt", "main")
+	gitRun(t, dir, "add", ".")
+	gitRun(t, dir, "commit", "-m", "main work")
+
+	return dir
+}
+
+func TestLogCommitRowsAt_RefSelectsBranchHistory(t *testing.T) {
+	dir := setupTwoBranchRepo(t)
+
+	mainRows, err := LogCommitRowsAt(dir, "main", 0, 200)
+	if err != nil {
+		t.Fatalf("log main error: %v", err)
+	}
+	mainMsgs := map[string]bool{}
+	for _, r := range mainRows {
+		mainMsgs[r.Msg] = true
+	}
+	if !mainMsgs["main work"] || !mainMsgs["base"] {
+		t.Errorf("main history = %v, want main work + base", mainMsgs)
+	}
+	if mainMsgs["side work"] {
+		t.Errorf("main history must not contain side-only commit, got %v", mainMsgs)
+	}
+
+	sideRows, err := LogCommitRowsAt(dir, "side", 0, 200)
+	if err != nil {
+		t.Fatalf("log side error: %v", err)
+	}
+	if len(sideRows) != 2 || sideRows[0].Msg != "side work" || sideRows[1].Msg != "base" {
+		t.Errorf("side history = %+v, want [side work base]", sideRows)
+	}
+}
+
+func TestLogCommitRowsAt_EmptyRefCombinesAllBranches(t *testing.T) {
+	dir := setupTwoBranchRepo(t)
+
+	rows, err := LogCommitRowsAt(dir, "", 0, 200)
+	if err != nil {
+		t.Fatalf("log --all error: %v", err)
+	}
+	msgs := map[string]bool{}
+	for _, r := range rows {
+		msgs[r.Msg] = true
+	}
+	if len(rows) != 3 {
+		t.Errorf("expected 3 commits across branches, got %d (%v)", len(rows), msgs)
+	}
+	if !msgs["main work"] || !msgs["side work"] || !msgs["base"] {
+		t.Errorf("--all history = %v, want commits from both branches", msgs)
 	}
 }
 

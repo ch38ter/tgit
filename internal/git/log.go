@@ -20,15 +20,22 @@ type CommitRow struct {
 // abbrev hash \0 full hash \0 parents \0 refs \0 subject \0 author.
 const commitRowsPrettyFormat = "--pretty=format:%h%x00%H%x00%P%x00%d%x00%s%x00%an"
 
-// LogCommitRowsAt runs `git log --skip=<skip> -n <max> --abbrev-commit
-// --decorate=short --all` with a NUL-separated pretty format in dir and parses
-// each line into a CommitRow. Every returned row is a real commit — topology
-// lives in Parents and lanes are computed by the UI layer.
+// LogCommitRowsAt runs `git log` in dir with a NUL-separated pretty format
+// and parses each line into a CommitRow. Two modes by ref:
 //
-// Silent-degradation contract: an empty repo produces empty stdout and a
-// non-zero exit; that yields an empty slice and nil error. max defaults to
-// 200 if <= 0; negative skip is treated as 0.
-func LogCommitRowsAt(dir string, skip int, max int) ([]CommitRow, error) {
+//   - ref == "": `git log --skip=N -n M --abbrev-commit --decorate=short
+//     --all <format>` — combined history across all refs (the default view).
+//   - ref != "": `git log <ref> --skip=N -n M --abbrev-commit
+//     --decorate=short <format>` — only commits reachable from ref (--all is
+//     omitted; a rev plus --all would union back to every ref).
+//
+// Every returned row is a real commit — topology lives in Parents and lanes
+// are computed by the UI layer.
+//
+// Silent-degradation contract: an empty repo or an unresolvable ref produces
+// empty stdout and a non-zero exit; that yields an empty slice and nil error.
+// max defaults to 200 if <= 0; negative skip is treated as 0.
+func LogCommitRowsAt(dir string, ref string, skip int, max int) ([]CommitRow, error) {
 	if max <= 0 {
 		max = 200
 	}
@@ -36,11 +43,20 @@ func LogCommitRowsAt(dir string, skip int, max int) ([]CommitRow, error) {
 		skip = 0
 	}
 
-	cmd := exec.Command("git", "log",
+	args := []string{"log"}
+	if ref != "" {
+		args = append(args, ref)
+	}
+	args = append(args,
 		"--skip="+strconv.Itoa(skip),
 		"-n", strconv.Itoa(max),
-		"--abbrev-commit", "--decorate=short", "--all",
-		commitRowsPrettyFormat)
+		"--abbrev-commit", "--decorate=short")
+	if ref == "" {
+		args = append(args, "--all")
+	}
+	args = append(args, commitRowsPrettyFormat)
+
+	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {

@@ -121,6 +121,11 @@ type model struct {
 
 	commitsExhausted bool
 
+	viewRef    string // commit history ref; "" = HEAD
+	pickerOpen bool
+	refs       []git.Ref
+	refCursor  int
+
 	watcher       *fsnotify.Watcher
 	debounceTimer *time.Timer
 	needsReload   bool
@@ -140,6 +145,15 @@ type reloadMsg struct{}
 type commitsAppendedMsg struct {
 	rows      []git.CommitRow
 	exhausted bool
+}
+
+type refsLoadedMsg struct {
+	refs []git.Ref
+}
+
+type refCommitsMsg struct {
+	ref     string
+	commits []git.CommitRow
 }
 
 func InitialModel() *model {
@@ -251,11 +265,21 @@ func (m *model) waitForReload() tea.Cmd {
 }
 
 func (m *model) reload() tea.Cmd {
-	return loadRepoData
+	viewRef := m.viewRef
+	return func() tea.Msg {
+		return loadRepoDataAt(viewRef)
+	}
 }
 
-// loadRepoData is a tea.Cmd that loads repo info and git status.
+// loadRepoData is a tea.Cmd that loads repo info, status, and HEAD commits.
 func loadRepoData() tea.Msg {
+	return loadRepoDataAt("")
+}
+
+// loadRepoDataAt loads repo info, worktree status, and the first page of
+// commit history at ref ("" = HEAD). Status and header stay HEAD-based; only
+// the commit list honors ref.
+func loadRepoDataAt(ref string) tea.Msg {
 	info, err := git.GetRepoInfo()
 	if err != nil {
 		return repoDataMsg{info: git.RepoInfo{}, changes: nil}
@@ -281,7 +305,7 @@ func loadRepoData() tea.Msg {
 		return changes[i].Path < changes[j].Path
 	})
 
-	commits, err := git.LogCommitRowsAt(".", 0, 200)
+	commits, err := git.LogCommitRowsAt(".", ref, 0, 200)
 	if err != nil {
 		commits = nil
 	}
@@ -310,6 +334,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.debounceMu.Unlock()
 			return m, m.reload()
+		case "b":
+			if m.currentView != "files" {
+				return m, nil
+			}
+			m.pickerOpen = !m.pickerOpen
+			if !m.pickerOpen {
+				return m, nil
+			}
+			return m, loadRefs
 		case "tab", "shift+tab":
 			if m.currentView != "files" {
 				return m, nil
@@ -320,6 +353,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.focusedPane = focusFiles
 			}
 		case "j", "down":
+			if m.pickerOpen {
+				if m.refCursor < len(m.refs) {
+					m.refCursor++
+				}
+				return m, nil
+			}
 			if m.currentView == "diff" {
 				var cmd tea.Cmd
 				m.diffViewport, cmd = m.diffViewport.Update(msg)
@@ -355,6 +394,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		case "k", "up":
+			if m.pickerOpen {
+				if m.refCursor > 0 {
+					m.refCursor--
+				}
+				return m, nil
+			}
 			if m.currentView == "diff" {
 				var cmd tea.Cmd
 				m.diffViewport, cmd = m.diffViewport.Update(msg)
@@ -385,6 +430,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		case "enter":
+			if m.pickerOpen {
+				if m.refCursor < 0 || m.refCursor > len(m.refs) {
+					return m, nil
+				}
+				if m.refCursor == 0 {
+					m.viewRef = ""
+				} else {
+					m.viewRef = m.refs[m.refCursor-1].Name
+				}
+				m.pickerOpen = false
+				return m, loadCommitsForRef(m.viewRef)
+			}
 			if m.currentView != "files" {
 				return m, nil
 			}
@@ -419,12 +476,19 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		case "esc":
+			if m.pickerOpen {
+				m.pickerOpen = false
+				return m, nil
+			}
 			if m.currentView == "diff" {
 				m.currentView = "files"
 				return m, tea.ClearScreen
 			}
 		}
 	case tea.MouseMsg:
+		if m.pickerOpen {
+			return m, nil
+		}
 		if m.currentView != "files" {
 			return m, nil
 		}
@@ -515,6 +579,33 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.commitsExhausted = true
 		}
 		return m, nil
+	case refsLoadedMsg:
+		m.refs = msg.refs
+		m.refCursor = 0
+		if m.viewRef != "" {
+			for i, r := range m.refs {
+				if r.Name == m.viewRef {
+					m.refCursor = i + 1 // +1: leading all-branches entry
+					break
+				}
+			}
+			if m.refCursor == 0 {
+				for i, r := range m.refs {
+					if r.Head {
+						m.refCursor = i + 1
+						break
+					}
+				}
+			}
+		}
+	case refCommitsMsg:
+		if msg.ref != m.viewRef {
+			return m, nil // stale response for a previously selected ref
+		}
+		m.commits = msg.commits
+		m.graphCells, m.laneOpen = buildLanes(msg.commits, nil)
+		m.selectedCommit = 0
+		m.commitsExhausted = len(msg.commits) < 200
 	}
 	return m, nil
 }
@@ -658,12 +749,33 @@ func (m *model) renderHeader() string {
 
 func (m *model) loadMoreCommits() tea.Cmd {
 	loaded := len(m.commits)
+	ref := m.viewRef
 	return func() tea.Msg {
-		rows, err := git.LogCommitRowsAt(".", loaded, 200)
+		rows, err := git.LogCommitRowsAt(".", ref, loaded, 200)
 		if err != nil {
 			return commitsAppendedMsg{exhausted: true}
 		}
 		return commitsAppendedMsg{rows: rows, exhausted: len(rows) < 200}
+	}
+}
+
+func loadRefs() tea.Msg {
+	refs, err := git.ListRefs()
+	if err != nil {
+		return refsLoadedMsg{}
+	}
+	return refsLoadedMsg{refs: refs}
+}
+
+// loadCommitsForRef fetches the first page of history at ref. The response
+// echoes ref so the handler can discard stale results.
+func loadCommitsForRef(ref string) tea.Cmd {
+	return func() tea.Msg {
+		rows, err := git.LogCommitRowsAt(".", ref, 0, 200)
+		if err != nil {
+			rows = nil
+		}
+		return refCommitsMsg{ref: ref, commits: rows}
 	}
 }
 
@@ -788,6 +900,10 @@ func (m *model) renderBottom(height int) string {
 }
 
 func (m *model) renderBottomSized(visibleRows int) string {
+	if m.pickerOpen {
+		return m.renderPicker(visibleRows)
+	}
+
 	if len(m.commits) == 0 {
 		return "no commits"
 	}
@@ -844,6 +960,63 @@ func (m *model) renderBottomSized(visibleRows int) string {
 			line = truncate.StringWithTail(line, uint(contentWidth), "...")
 		}
 		lines = append(lines, line)
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+// allBranchesEntry is the synthetic leading picker row restoring the combined
+// all-refs view (viewRef ""). Never stored in m.refs; its name never reaches git.
+const allBranchesEntry = "(all branches)"
+
+// pickerEntries returns the picker rows: the synthetic all-branches entry at
+// index 0 followed by the ListRefs results, giving cursor math one index space.
+func (m *model) pickerEntries() []git.Ref {
+	entries := make([]git.Ref, 0, len(m.refs)+1)
+	entries = append(entries, git.Ref{Name: allBranchesEntry})
+	return append(entries, m.refs...)
+}
+
+// renderPicker draws the ref picker that replaces the commit list while open.
+// Rows are plain text ("<marker> <name>") so the whole-row Reverse wrap of
+// selectedStyle is safe: lipgloss renders reverse per character and would
+// mangle any embedded ANSI (ANTI-PATTERN #4). Truncation happens before
+// styling for the same reason.
+func (m *model) renderPicker(visibleRows int) string {
+	if visibleRows < 1 {
+		visibleRows = 1
+	}
+
+	entries := m.pickerEntries()
+
+	contentWidth := m.width - 4
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
+
+	start := 0
+	if m.refCursor >= visibleRows {
+		start = m.refCursor - visibleRows + 1
+	}
+	end := start + visibleRows
+	if end > len(entries) {
+		end = len(entries)
+	}
+
+	var lines []string
+	for i := start; i < end; i++ {
+		marker := " "
+		if entries[i].Head {
+			marker = "*"
+		}
+		row := marker + " " + entries[i].Name
+		if ansi.PrintableRuneWidth(row) > contentWidth {
+			row = truncate.StringWithTail(row, uint(contentWidth), "...")
+		}
+		if i == m.refCursor {
+			row = selectedStyle.Render(row)
+		}
+		lines = append(lines, row)
 	}
 
 	return strings.Join(lines, "\n")
