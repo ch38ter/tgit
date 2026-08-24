@@ -121,10 +121,11 @@ type model struct {
 
 	commitsExhausted bool
 
-	viewRef    string // commit history ref; "" = HEAD
+	viewRefs   []string        // commit history refs; empty = all-branches (--all)
 	pickerOpen bool
 	refs       []git.Ref
 	refCursor  int
+	checked    map[string]bool // picker check state by ref name
 
 	watcher       *fsnotify.Watcher
 	debounceTimer *time.Timer
@@ -152,7 +153,7 @@ type refsLoadedMsg struct {
 }
 
 type refCommitsMsg struct {
-	ref     string
+	refs    []string
 	commits []git.CommitRow
 }
 
@@ -265,21 +266,21 @@ func (m *model) waitForReload() tea.Cmd {
 }
 
 func (m *model) reload() tea.Cmd {
-	viewRef := m.viewRef
+	refs := append([]string(nil), m.viewRefs...)
 	return func() tea.Msg {
-		return loadRepoDataAt(viewRef)
+		return loadRepoDataAt(refs)
 	}
 }
 
 // loadRepoData is a tea.Cmd that loads repo info, status, and HEAD commits.
 func loadRepoData() tea.Msg {
-	return loadRepoDataAt("")
+	return loadRepoDataAt(nil)
 }
 
 // loadRepoDataAt loads repo info, worktree status, and the first page of
-// commit history at ref ("" = HEAD). Status and header stay HEAD-based; only
-// the commit list honors ref.
-func loadRepoDataAt(ref string) tea.Msg {
+// commit history at refs (nil = default view). Status and header stay
+// HEAD-based; only the commit list honors refs.
+func loadRepoDataAt(refs []string) tea.Msg {
 	info, err := git.GetRepoInfo()
 	if err != nil {
 		return repoDataMsg{info: git.RepoInfo{}, changes: nil}
@@ -305,7 +306,7 @@ func loadRepoDataAt(ref string) tea.Msg {
 		return changes[i].Path < changes[j].Path
 	})
 
-	commits, err := git.LogCommitRowsAt(".", ref, 0, 200)
+	commits, err := git.LogCommitRowsAt(".", refs, 0, 200)
 	if err != nil {
 		commits = nil
 	}
@@ -343,6 +344,19 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			return m, loadRefs
+		case " ":
+			if !m.pickerOpen {
+				return m, nil
+			}
+			if m.refCursor < 1 || m.refCursor > len(m.refs) {
+				return m, nil
+			}
+			if m.checked == nil {
+				m.checked = make(map[string]bool)
+			}
+			name := m.refs[m.refCursor-1].Name
+			m.checked[name] = !m.checked[name]
+			return m, nil
 		case "tab", "shift+tab":
 			if m.currentView != "files" {
 				return m, nil
@@ -434,13 +448,24 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.refCursor < 0 || m.refCursor > len(m.refs) {
 					return m, nil
 				}
+				var applied []string
 				if m.refCursor == 0 {
-					m.viewRef = ""
+					applied = nil // explicit all-branches choice clears checks
+				} else if len(m.checked) > 0 {
+					for i, e := range m.pickerEntries() {
+						if i == 0 {
+							continue // synthetic all-branches entry
+						}
+						if m.checked[e.Name] {
+							applied = append(applied, e.Name)
+						}
+					}
 				} else {
-					m.viewRef = m.refs[m.refCursor-1].Name
+					applied = []string{m.refs[m.refCursor-1].Name}
 				}
+				m.viewRefs = applied
 				m.pickerOpen = false
-				return m, loadCommitsForRef(m.viewRef)
+				return m, loadCommitsForRefs(m.viewRefs)
 			}
 			if m.currentView != "files" {
 				return m, nil
@@ -581,26 +606,30 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case refsLoadedMsg:
 		m.refs = msg.refs
+		m.checked = make(map[string]bool, len(m.viewRefs))
+		for _, r := range m.viewRefs {
+			m.checked[r] = true
+		}
 		m.refCursor = 0
-		if m.viewRef != "" {
+		if len(m.viewRefs) == 1 {
 			for i, r := range m.refs {
-				if r.Name == m.viewRef {
+				if r.Name == m.viewRefs[0] {
 					m.refCursor = i + 1 // +1: leading all-branches entry
 					break
 				}
 			}
-			if m.refCursor == 0 {
-				for i, r := range m.refs {
-					if r.Head {
-						m.refCursor = i + 1
-						break
-					}
+		}
+		if m.refCursor == 0 && len(m.viewRefs) > 0 {
+			for i, r := range m.refs {
+				if r.Head {
+					m.refCursor = i + 1
+					break
 				}
 			}
 		}
 	case refCommitsMsg:
-		if msg.ref != m.viewRef {
-			return m, nil // stale response for a previously selected ref
+		if refKey(msg.refs) != refKey(m.viewRefs) {
+			return m, nil // stale response for a previous selection
 		}
 		m.commits = msg.commits
 		m.graphCells, m.laneOpen = buildLanes(msg.commits, nil)
@@ -749,9 +778,9 @@ func (m *model) renderHeader() string {
 
 func (m *model) loadMoreCommits() tea.Cmd {
 	loaded := len(m.commits)
-	ref := m.viewRef
+	refs := append([]string(nil), m.viewRefs...)
 	return func() tea.Msg {
-		rows, err := git.LogCommitRowsAt(".", ref, loaded, 200)
+		rows, err := git.LogCommitRowsAt(".", refs, loaded, 200)
 		if err != nil {
 			return commitsAppendedMsg{exhausted: true}
 		}
@@ -767,16 +796,23 @@ func loadRefs() tea.Msg {
 	return refsLoadedMsg{refs: refs}
 }
 
-// loadCommitsForRef fetches the first page of history at ref. The response
-// echoes ref so the handler can discard stale results.
-func loadCommitsForRef(ref string) tea.Cmd {
+// loadCommitsForRefs fetches the first page of history at refs (empty =
+// all-branches default view). The response echoes refs so the handler can
+// discard stale results.
+func loadCommitsForRefs(refs []string) tea.Cmd {
 	return func() tea.Msg {
-		rows, err := git.LogCommitRowsAt(".", ref, 0, 200)
+		rows, err := git.LogCommitRowsAt(".", refs, 0, 200)
 		if err != nil {
 			rows = nil
 		}
-		return refCommitsMsg{ref: ref, commits: rows}
+		return refCommitsMsg{refs: refs, commits: rows}
 	}
+}
+
+// refKey is the order-significant identity of a ref selection, used to match
+// refCommitsMsg responses against m.viewRefs and discard stale ones.
+func refKey(refs []string) string {
+	return strings.Join(refs, "\x00")
 }
 
 func (m *model) renderMiddle() string {
@@ -1009,7 +1045,11 @@ func (m *model) renderPicker(visibleRows int) string {
 		if entries[i].Head {
 			marker = "*"
 		}
-		row := marker + " " + entries[i].Name
+		check := "[ ] "
+		if m.checked[entries[i].Name] {
+			check = "[x] "
+		}
+		row := check + marker + " " + entries[i].Name
 		if ansi.PrintableRuneWidth(row) > contentWidth {
 			row = truncate.StringWithTail(row, uint(contentWidth), "...")
 		}

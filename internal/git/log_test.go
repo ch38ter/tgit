@@ -63,7 +63,7 @@ func is40Hex(s string) bool {
 func TestLogCommitRowsAt_MergeRepo(t *testing.T) {
 	dir := setupMergeRepo(t)
 
-	rows, err := LogCommitRowsAt(dir, "HEAD", 0, 200)
+	rows, err := LogCommitRowsAt(dir, []string{"HEAD"}, 0, 200)
 	if err != nil {
 		t.Fatalf("LogCommitRowsAt error: %v", err)
 	}
@@ -131,12 +131,12 @@ func TestLogCommitRowsAt_MergeRepo(t *testing.T) {
 func TestLogCommitRowsAt_SkipAndMaxPaging(t *testing.T) {
 	dir := setupMergeRepo(t)
 
-	all, err := LogCommitRowsAt(dir, "HEAD", 0, 200)
+	all, err := LogCommitRowsAt(dir, []string{"HEAD"}, 0, 200)
 	if err != nil {
 		t.Fatalf("full page error: %v", err)
 	}
 
-	page, err := LogCommitRowsAt(dir, "HEAD", 2, 2)
+	page, err := LogCommitRowsAt(dir, []string{"HEAD"}, 2, 2)
 	if err != nil {
 		t.Fatalf("paged error: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestLogCommitRowsAt_SkipAndMaxPaging(t *testing.T) {
 			page[0].FullHash, page[1].FullHash, all[2].FullHash, all[3].FullHash)
 	}
 
-	exhausted, err := LogCommitRowsAt(dir, "HEAD", 6, 200)
+	exhausted, err := LogCommitRowsAt(dir, []string{"HEAD"}, 6, 200)
 	if err != nil {
 		t.Fatalf("past-end error: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestLogCommitRowsAt_EmptyRepo(t *testing.T) {
 	dir := t.TempDir()
 	gitRun(t, dir, "init", "-b", "main")
 
-	rows, err := LogCommitRowsAt(dir, "HEAD", 0, 200)
+	rows, err := LogCommitRowsAt(dir, []string{"HEAD"}, 0, 200)
 	if err != nil {
 		t.Fatalf("empty repo must degrade silently, got error: %v", err)
 	}
@@ -197,7 +197,7 @@ func setupTwoBranchRepo(t *testing.T) string {
 func TestLogCommitRowsAt_RefSelectsBranchHistory(t *testing.T) {
 	dir := setupTwoBranchRepo(t)
 
-	mainRows, err := LogCommitRowsAt(dir, "main", 0, 200)
+	mainRows, err := LogCommitRowsAt(dir, []string{"main"}, 0, 200)
 	if err != nil {
 		t.Fatalf("log main error: %v", err)
 	}
@@ -212,7 +212,7 @@ func TestLogCommitRowsAt_RefSelectsBranchHistory(t *testing.T) {
 		t.Errorf("main history must not contain side-only commit, got %v", mainMsgs)
 	}
 
-	sideRows, err := LogCommitRowsAt(dir, "side", 0, 200)
+	sideRows, err := LogCommitRowsAt(dir, []string{"side"}, 0, 200)
 	if err != nil {
 		t.Fatalf("log side error: %v", err)
 	}
@@ -221,10 +221,10 @@ func TestLogCommitRowsAt_RefSelectsBranchHistory(t *testing.T) {
 	}
 }
 
-func TestLogCommitRowsAt_EmptyRefCombinesAllBranches(t *testing.T) {
+func TestLogCommitRowsAt_EmptyRefsCombineAllBranches(t *testing.T) {
 	dir := setupTwoBranchRepo(t)
 
-	rows, err := LogCommitRowsAt(dir, "", 0, 200)
+	rows, err := LogCommitRowsAt(dir, nil, 0, 200)
 	if err != nil {
 		t.Fatalf("log --all error: %v", err)
 	}
@@ -237,6 +237,34 @@ func TestLogCommitRowsAt_EmptyRefCombinesAllBranches(t *testing.T) {
 	}
 	if !msgs["main work"] || !msgs["side work"] || !msgs["base"] {
 		t.Errorf("--all history = %v, want commits from both branches", msgs)
+	}
+}
+
+func TestLogCommitRowsAt_TwoRefsUnionExcludeThird(t *testing.T) {
+	dir := setupTwoBranchRepo(t)
+
+	gitRun(t, dir, "checkout", "-b", "third")
+	writeFile(t, dir, "t.txt", "third")
+	gitRun(t, dir, "add", ".")
+	gitRun(t, dir, "commit", "-m", "third work")
+	gitRun(t, dir, "checkout", "main")
+
+	rows, err := LogCommitRowsAt(dir, []string{"main", "side"}, 0, 200)
+	if err != nil {
+		t.Fatalf("log main+side error: %v", err)
+	}
+	msgs := map[string]bool{}
+	for _, r := range rows {
+		msgs[r.Msg] = true
+	}
+	if len(rows) != 3 {
+		t.Errorf("union of main+side = %d commits, want 3 (base shared once)", len(rows))
+	}
+	if !msgs["main work"] || !msgs["side work"] || !msgs["base"] {
+		t.Errorf("union history = %v, want commits from both queried refs", msgs)
+	}
+	if msgs["third work"] {
+		t.Errorf("unqueried branch commit must not appear, got %v", msgs)
 	}
 }
 

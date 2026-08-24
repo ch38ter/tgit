@@ -21,13 +21,16 @@ type CommitRow struct {
 const commitRowsPrettyFormat = "--pretty=format:%h%x00%H%x00%P%x00%d%x00%s%x00%an"
 
 // LogCommitRowsAt runs `git log` in dir with a NUL-separated pretty format
-// and parses each line into a CommitRow. Two modes by ref:
+// and parses each line into a CommitRow. Two modes by refs:
 //
-//   - ref == "": `git log --skip=N -n M --abbrev-commit --decorate=short
+//   - len(refs) == 0: `git log --skip=N -n M --abbrev-commit --decorate=short
 //     --all <format>` — combined history across all refs (the default view).
-//   - ref != "": `git log <ref> --skip=N -n M --abbrev-commit
-//     --decorate=short <format>` — only commits reachable from ref (--all is
-//     omitted; a rev plus --all would union back to every ref).
+//   - len(refs) >= 1: `git log r1 r2 ... --skip=N -n M --abbrev-commit
+//     --decorate=short <format>` — union of the histories reachable from the
+//     given refs (--all is omitted; a rev plus --all would union back to
+//     every ref). Each ref is its own argv element; reachability, not date
+//     rank, decides membership, so old commits on selected branches stay
+//     visible on page one.
 //
 // Every returned row is a real commit — topology lives in Parents and lanes
 // are computed by the UI layer.
@@ -35,7 +38,7 @@ const commitRowsPrettyFormat = "--pretty=format:%h%x00%H%x00%P%x00%d%x00%s%x00%a
 // Silent-degradation contract: an empty repo or an unresolvable ref produces
 // empty stdout and a non-zero exit; that yields an empty slice and nil error.
 // max defaults to 200 if <= 0; negative skip is treated as 0.
-func LogCommitRowsAt(dir string, ref string, skip int, max int) ([]CommitRow, error) {
+func LogCommitRowsAt(dir string, refs []string, skip int, max int) ([]CommitRow, error) {
 	if max <= 0 {
 		max = 200
 	}
@@ -43,15 +46,14 @@ func LogCommitRowsAt(dir string, ref string, skip int, max int) ([]CommitRow, er
 		skip = 0
 	}
 
-	args := []string{"log"}
-	if ref != "" {
-		args = append(args, ref)
-	}
+	args := make([]string, 0, len(refs)+7)
+	args = append(args, "log")
+	args = append(args, refs...)
 	args = append(args,
 		"--skip="+strconv.Itoa(skip),
 		"-n", strconv.Itoa(max),
 		"--abbrev-commit", "--decorate=short")
-	if ref == "" {
+	if len(refs) == 0 {
 		args = append(args, "--all")
 	}
 	args = append(args, commitRowsPrettyFormat)
