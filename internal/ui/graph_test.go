@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -12,12 +13,12 @@ import (
 func TestRenderCommitLineAuthorSuffix(t *testing.T) {
 	forceANSI256(t)
 
-	out := renderCommitLineStyled(git.CommitRow{Hash: "abc1234", Msg: "msg", Author: "Chester Cheng"}, "●", 100)
+	out := renderCommitLineStyled(git.CommitRow{Hash: "abc1234", Msg: "msg", Author: "Chester Cheng"}, "●", 100, selNone)
 	if !strings.Contains(out, authorStyle.Render("  Chester Cheng")) {
 		t.Errorf("author suffix missing from commit line: %q", out)
 	}
 
-	noAuthor := renderCommitLineStyled(git.CommitRow{Hash: "abc1234", Msg: "msg"}, "●", 100)
+	noAuthor := renderCommitLineStyled(git.CommitRow{Hash: "abc1234", Msg: "msg"}, "●", 100, selNone)
 	if strings.Contains(noAuthor, authorStyle.Render("  ")) {
 		t.Errorf("empty author must not emit suffix: %q", noAuthor)
 	}
@@ -26,7 +27,7 @@ func TestRenderCommitLineAuthorSuffix(t *testing.T) {
 func TestRefsRightAligned(t *testing.T) {
 	forceANSI256(t)
 
-	out := renderCommitLineStyled(git.CommitRow{Hash: "abc1234", Msg: "short", Refs: "(HEAD -> master)"}, "●", 60)
+	out := renderCommitLineStyled(git.CommitRow{Hash: "abc1234", Msg: "short", Refs: "(HEAD -> master)"}, "●", 60, selNone)
 	if got := lipgloss.Width(out); got != 60 {
 		t.Errorf("right-aligned row width = %d, want 60: %q", got, stripANSI(out))
 	}
@@ -41,7 +42,7 @@ func TestRefsRightAligned(t *testing.T) {
 func TestRefsDegradeNarrow(t *testing.T) {
 	forceANSI256(t)
 
-	fits := renderCommitLineStyled(git.CommitRow{Hash: "abc1234", Msg: "m", Refs: "(h)"}, "●", 20)
+	fits := renderCommitLineStyled(git.CommitRow{Hash: "abc1234", Msg: "m", Refs: "(h)"}, "●", 20, selNone)
 	if got := lipgloss.Width(fits); got > 20 {
 		t.Errorf("degraded inline row width = %d, want <= 20: %q", got, stripANSI(fits))
 	}
@@ -53,7 +54,7 @@ func TestRefsDegradeNarrow(t *testing.T) {
 		Hash: "abc1234",
 		Msg:  "a very long commit message that will never fit",
 		Refs: "(HEAD -> master, tag: v1.2.3, origin/main)",
-	}, "●", 10)
+	}, "●", 10, selNone)
 	if !strings.Contains(stripANSI(long), "(HEAD -> master, tag: v1.2.3, origin/main)") {
 		t.Errorf("malformed narrow input must not drop refs: %q", stripANSI(long))
 	}
@@ -76,5 +77,64 @@ func TestRefsSurviveBottomTruncate(t *testing.T) {
 	}
 	if strings.Contains(stripANSI(out), "...") {
 		t.Errorf("fitting row must not be truncated: %q", stripANSI(out))
+	}
+}
+
+func containsReverseSGR(s string) bool {
+	for _, seq := range strings.Split(s, "\x1b[")[1:] {
+		for _, p := range strings.Split(strings.SplitN(seq, "m", 2)[0], ";") {
+			if p == "7" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func TestSelectionHighlightsHash(t *testing.T) {
+	forceANSI256(t)
+
+	commit := git.CommitRow{Hash: "abc1234", Msg: "msg"}
+	cells := "●"
+
+	// Focused-selected: reverse video (SGR code 7) must sit on the hash
+	// itself, and nothing may wrap the graph cells segment.
+	sel := renderCommitLineStyled(commit, cells, 100, selFocused)
+	idx := strings.Index(sel, "abc1234")
+	if idx < 0 {
+		t.Fatalf("hash missing from selected row: %q", sel)
+	}
+	sgrStart := strings.LastIndex(sel[:idx], "\x1b[")
+	if sgrStart < 0 {
+		t.Fatalf("no SGR sequence precedes the selected hash: %q", sel)
+	}
+	params := strings.Split(strings.TrimSuffix(sel[sgrStart+2:idx], "m"), ";")
+	reverse := false
+	for _, p := range params {
+		if p == "7" {
+			reverse = true
+		}
+	}
+	if !reverse {
+		t.Errorf("selected hash must carry reverse video (code 7), got SGR %v: %q", params, sel)
+	}
+	if head := sel[:sgrStart]; strings.Contains(head, "\x1b[") {
+		t.Errorf("selection styling must not wrap the cells segment: %q", head)
+	}
+
+	// Inactive-selected: dim foreground on the hash, no reverse anywhere.
+	inactive := renderCommitLineStyled(commit, cells, 100, selInactive)
+	if !strings.Contains(inactive, inactiveHashStyle.Render("abc1234")) {
+		t.Errorf("inactive-selected hash must use dim foreground: %q", inactive)
+	}
+	if strings.Contains(inactive, "\x1b[7m") || strings.Contains(inactive, ";7m") {
+		t.Errorf("inactive row must not reverse video: %q", inactive)
+	}
+
+	// Unselected: byte-identical to the plain rendering.
+	none := renderCommitLineStyled(commit, cells, 100, selNone)
+	want := fmt.Sprintf("%s %s %s", cells, commitHashStyle.Render(commit.Hash), commit.Msg)
+	if none != want {
+		t.Errorf("unselected row changed:\n got %q\nwant %q", none, want)
 	}
 }

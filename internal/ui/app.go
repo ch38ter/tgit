@@ -66,6 +66,8 @@ var (
 
 	// Commit row styles
 	commitHashStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("3")) // yellow
+	selectedHashStyle = lipgloss.NewStyle().Reverse(true).Bold(true)
+	inactiveHashStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 	commitRefsStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("6")) // cyan
 	authorStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 
@@ -827,33 +829,50 @@ func (m *model) renderBottomSized(visibleRows int) string {
 		if i < len(m.graphCells) {
 			cells = m.graphCells[i]
 		}
-		line := renderCommitLineStyled(m.commits[i], cells, contentWidth)
+		sel := selNone
+		if i == selectedIdx {
+			if m.focusedPane == focusCommits && m.currentView == "files" {
+				sel = selFocused
+			} else {
+				sel = selInactive
+			}
+		}
+		line := renderCommitLineStyled(m.commits[i], cells, contentWidth, sel)
 		// truncate reserves tail cells even for fitting rows, so only invoke
 		// it when the row actually overflows (same counter as truncate).
 		if ansi.PrintableRuneWidth(line) > contentWidth {
 			line = truncate.StringWithTail(line, uint(contentWidth), "...")
 		}
-		if i == selectedIdx {
-			if m.focusedPane == focusCommits && m.currentView == "files" {
-				lines = append(lines, selectedStyle.Render(line))
-			} else {
-				lines = append(lines, inactiveSelectedStyle.Render(line))
-			}
-		} else {
-			lines = append(lines, line)
-		}
+		lines = append(lines, line)
 	}
 
 	return strings.Join(lines, "\n")
 }
 
+// Commit-row selection states: which treatment the hash segment gets.
+const (
+	selNone     = iota // plain yellow hash
+	selFocused         // pane-focused selection: reverse+bold hash
+	selInactive        // unfocused selection: dim hash
+)
+
 // renderCommitLineStyled renders a single commit row with lane cells, hash,
 // refs, and message. cells is the pre-styled graph segment from buildLanes.
-// With refs present and room to spare, refs right-align at width; otherwise
-// they degrade to inline after the hash. Truncation of the whole row remains
-// the caller's job.
-func renderCommitLineStyled(commit git.CommitRow, cells string, width int) string {
-	hash := commitHashStyle.Render(commit.Hash)
+// selection picks the hash treatment (selNone/selFocused/selInactive); only
+// the hash is restyled — segments compose independently because nesting
+// pre-styled text inside another Render dies at the inner reset (ANTI-
+// PATTERN #4). With refs present and room to spare, refs right-align at
+// width; otherwise they degrade to inline after the hash. Truncation of the
+// whole row remains the caller's job.
+func renderCommitLineStyled(commit git.CommitRow, cells string, width int, selection int) string {
+	hashStyle := commitHashStyle
+	switch selection {
+	case selFocused:
+		hashStyle = selectedHashStyle
+	case selInactive:
+		hashStyle = inactiveHashStyle
+	}
+	hash := hashStyle.Render(commit.Hash)
 	styledRefs := commitRefsStyle.Render(commit.Refs)
 	var author string
 	if commit.Author != "" {

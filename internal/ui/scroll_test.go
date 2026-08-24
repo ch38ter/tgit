@@ -33,7 +33,7 @@ func TestBottomPaneScrollsWindow(t *testing.T) {
 	if !strings.Contains(stripANSI(out), "commit number 29") {
 		t.Fatalf("selected commit #29 must be visible in the scrolled window:\n%s", stripANSI(out))
 	}
-	if !strings.Contains(lines[6], "\x1b[7m") {
+	if !containsReverseSGR(lines[6]) {
 		t.Errorf("last window row (selected #29) must carry the selection highlight: %q", stripANSI(lines[6]))
 	}
 
