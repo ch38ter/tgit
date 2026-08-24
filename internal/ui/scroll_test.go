@@ -87,14 +87,74 @@ func TestLoadMoreAppendsOlderCommits(t *testing.T) {
 		t.Errorf("commitsExhausted = %v, want %v (raw page=%d)", m2.commitsExhausted, want, len(cam.rows))
 	}
 
-	// Exhausted: j wraps instead of returning a cmd.
+	// Exhausted: j clamps at last index instead of returning a cmd.
 	me := newModel()
 	me.commitsExhausted = true
 	_, cmdE := me.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
 	if cmdE != nil {
-		t.Fatal("j on exhausted history must wrap in place, not return a loadMore cmd")
+		t.Fatal("j on exhausted history must clamp in place, not return a loadMore cmd")
 	}
-	if me.selectedCommit != 0 {
-		t.Errorf("exhausted j should wrap to first commit, got %d", me.selectedCommit)
+	if me.selectedCommit != 1 {
+		t.Errorf("exhausted j should stay clamped at last index, got %d", me.selectedCommit)
+	}
+}
+
+func TestCommitSelectionClampsAtEnds(t *testing.T) {
+	newModel := func() *model {
+		m := InitialModel()
+		m.width, m.height = 80, 24
+		m.commits = []git.CommitRow{
+			{Hash: "aaa1111", Msg: "loaded newest"},
+			{Hash: "bbb2222", Msg: "loaded second"},
+		}
+		m.focusedPane = focusCommits
+		m.currentView = "files"
+		return m
+	}
+	last := 1 // len(commits)-1
+
+	// k at index 0 must stay at 0.
+	m := newModel()
+	m.selectedCommit = 0
+	up, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if got := up.(*model).selectedCommit; got != 0 {
+		t.Errorf("k at first commit must stay at 0, got %d", got)
+	}
+
+	// tea.KeyUp at index 0 must stay at 0.
+	m = newModel()
+	m.selectedCommit = 0
+	up2, _ := m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if got := up2.(*model).selectedCommit; got != 0 {
+		t.Errorf("up at first commit must stay at 0, got %d", got)
+	}
+
+	// j at last index with exhausted history must stay at last index.
+	m = newModel()
+	m.selectedCommit = last
+	m.commitsExhausted = true
+	dn, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if got := dn.(*model).selectedCommit; got != last {
+		t.Errorf("j at last commit with exhausted history must stay at %d, got %d", last, got)
+	}
+
+	// tea.KeyDown at last index with exhausted history must stay at last index.
+	m = newModel()
+	m.selectedCommit = last
+	m.commitsExhausted = true
+	dn2, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if got := dn2.(*model).selectedCommit; got != last {
+		t.Errorf("down at last commit with exhausted history must stay at %d, got %d", last, got)
+	}
+
+	// j at last index with history remaining must trigger load-more and keep selection clamped.
+	m = newModel()
+	m.selectedCommit = last
+	dn3, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if cmd == nil {
+		t.Fatal("j past last loaded commit with history remaining must return a loadMore cmd")
+	}
+	if got := dn3.(*model).selectedCommit; got != last {
+		t.Errorf("selection must stay clamped at %d until page arrives, got %d", last, got)
 	}
 }

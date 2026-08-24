@@ -346,7 +346,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							m.selectedCommit = len(m.commits) - 1
 							return m, m.loadMoreCommits()
 						}
-						m.selectedCommit = 0
 					} else {
 						m.selectedCommit = next
 					}
@@ -377,9 +376,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.selectedCommit = 0
 				} else {
 					next := m.selectedCommit - 1
-					if next < 0 {
-						m.selectedCommit = len(m.commits) - 1
-					} else {
+					if next >= 0 {
 						m.selectedCommit = next
 					}
 				}
