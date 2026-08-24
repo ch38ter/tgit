@@ -175,6 +175,54 @@ func TestBuildLanesOctopusDoesNotPanic(t *testing.T) {
 	}
 }
 
+// Regression for the connect() bridge-overwrite bug: the outermost extra's
+// bridge '─' used to erase the inner extra's start curve '╮', collapsing a
+// three-way fan-out into what reads as a single branch (●─╮).
+func TestBuildLanesOctopusFanout(t *testing.T) {
+	rows := []git.CommitRow{
+		laneFixture("octopus", "o000000", "p100000", "p200000", "p300000"),
+		laneFixture("p1", "p100000"),
+		laneFixture("p2", "p200000"),
+		laneFixture("p3", "p300000"),
+	}
+
+	cells, _ := buildLanes(rows, nil)
+
+	// Every extra parent gets its own start curve leaving the dot; no
+	// bridge may degrade them.
+	if got := stripANSI(cells[0]); got != "●╮╮" {
+		t.Errorf("octopus row must fan out as ●╮╮, got %q", got)
+	}
+}
+
+// Regression: three children of one commit re-meet at their fork point. The
+// later join's bridge '─' used to overwrite the earlier join's curve '╯',
+// visually disconnecting the middle lane (●─╯ instead of ●╯╯).
+func TestBuildLanesForkPointTripleJoin(t *testing.T) {
+	rows := []git.CommitRow{
+		laneFixture("c1", "c100000", "b000000"),
+		laneFixture("c2", "c200000", "b000000"),
+		laneFixture("c3", "c300000", "b000000"),
+		laneFixture("fork b", "b000000"),
+	}
+
+	cells, open := buildLanes(rows, nil)
+
+	wantDots := []int{0, 1, 2, 0}
+	for i, want := range wantDots {
+		if got := dotCol(t, cells[i]); got != want {
+			t.Errorf("row %d dot at lane %d, want %d (%q)", i, got, want, stripANSI(cells[i]))
+		}
+	}
+	// Both joining lanes must keep their convergence curves into the dot.
+	if got := stripANSI(cells[3]); got != "●╯╯" {
+		t.Errorf("fork-point row must converge as ●╯╯, got %q", got)
+	}
+	if n := len(open); n != 0 {
+		t.Errorf("fully consumed fork history must leave no open lanes, got %v", open)
+	}
+}
+
 func TestBuildLanesEmpty(t *testing.T) {
 	cells, open := buildLanes(nil, nil)
 	if len(cells) != 0 {

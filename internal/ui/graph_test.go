@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/reflow/truncate"
 	"tgit/internal/git"
 )
 
@@ -136,5 +137,55 @@ func TestSelectionHighlightsHash(t *testing.T) {
 	want := fmt.Sprintf("%s %s %s", cells, commitHashStyle.Render(commit.Hash), commit.Msg)
 	if none != want {
 		t.Errorf("unselected row changed:\n got %q\nwant %q", none, want)
+	}
+}
+
+func TestRenderCommitLinePreservesValidUTF8(t *testing.T) {
+	forceANSI256(t)
+
+	out := renderCommitLineStyled(git.CommitRow{Hash: "abc1234", Msg: "修复中文路径排序"}, "●", 100, selNone)
+	if !strings.Contains(stripANSI(out), "修复中文路径排序") {
+		t.Errorf("valid Chinese message must be preserved verbatim: %q", stripANSI(out))
+	}
+}
+
+func TestRenderCommitLineSanitizesTabsAndInvalidUTF8(t *testing.T) {
+	forceANSI256(t)
+
+	tabbed := renderCommitLineStyled(git.CommitRow{Hash: "abc1234", Msg: "col1\tcol2"}, "●", 100, selNone)
+	if strings.Contains(tabbed, "\t") {
+		t.Errorf("commit-row tab must be sanitized away: %q", tabbed)
+	}
+	if !strings.Contains(stripANSI(tabbed), "col1    col2") {
+		t.Errorf("tab must expand to spaces in place: %q", stripANSI(tabbed))
+	}
+
+	bad := renderCommitLineStyled(git.CommitRow{Hash: "abc1234", Msg: "bad\xff\xfe tail"}, "●", 100, selNone)
+	if !strings.Contains(bad, "\uFFFD") {
+		t.Errorf("invalid UTF-8 message must surface as U+FFFD: %q", bad)
+	}
+	if strings.Contains(bad, "\xff") || strings.Contains(bad, "\xfe") {
+		t.Errorf("raw invalid bytes must not reach the rendered row: %q", bad)
+	}
+
+	badAuthor := renderCommitLineStyled(git.CommitRow{Hash: "abc1234", Msg: "m", Author: "\xc3\x28"}, "●", 100, selNone)
+	if !strings.Contains(badAuthor, "\uFFFD") {
+		t.Errorf("invalid UTF-8 author must surface as U+FFFD: %q", badAuthor)
+	}
+}
+
+func TestCommitRowTruncateBoundedMixedScript(t *testing.T) {
+	forceANSI256(t)
+
+	msg := strings.Repeat("提交commit", 40) // mixed CJK/ASCII, ~400 display cells
+	row := renderCommitLineStyled(git.CommitRow{Hash: "abc1234", Msg: msg}, "●", 500, selFocused)
+
+	const w = 80
+	line := truncate.StringWithTail(row, w, "...")
+	if got := lipgloss.Width(line); got > w {
+		t.Errorf("truncated mixed-script row width = %d, want <= %d: %q", got, w, stripANSI(line))
+	}
+	if !strings.HasSuffix(stripANSI(line), "...") {
+		t.Errorf("overlong row must carry the truncate tail: %q", stripANSI(line))
 	}
 }

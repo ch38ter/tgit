@@ -146,15 +146,24 @@ func buildLaneRow(row git.CommitRow, lanes [][]string) (string, [][]string) {
 	}
 	grid[L] = graphDotStyles[L%len(graphDotStyles)].Render("●")
 
+	// Bridges fill only empty/vertical slots; a curve pinned by an earlier
+	// connection is never overwritten — octopus/multi-join arcs share the
+	// span between dot and outermost column, and an unconditional bridge
+	// severed those lanes visually. Endpoints stay deterministic: glyphs pin
+	// in extras-then-joins order, so two curves on one column keep the join.
+	curveCols := make(map[int]bool)
 	connect := func(col int, glyph string) {
 		lo, hi := L, col
 		if lo > hi {
 			lo, hi = hi, lo
 		}
 		for c := lo + 1; c < hi; c++ {
-			grid[c] = graphPalette[col%len(graphPalette)].Render("─")
+			if !curveCols[c] {
+				grid[c] = graphPalette[col%len(graphPalette)].Render("─")
+			}
 		}
 		grid[col] = glyph
+		curveCols[col] = true
 	}
 	for _, p := range extras {
 		m := laneIndexOf(lanes, p)

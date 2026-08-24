@@ -113,6 +113,7 @@ type model struct {
 	laneOpen      [][]string // open lane state carried across pages
 	selectedFile   int
 	selectedCommit int
+	commitScroll   int // bottom-pane window start; sticky until selection crosses an edge
 	focusedPane    focusedPane
 	currentView   string
 	diffContent   string
@@ -570,6 +571,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.commits = msg.commits
 		m.graphCells, m.laneOpen = buildLanes(msg.commits, nil)
 		m.commitsExhausted = false
+		m.commitScroll = 0
 		if len(m.changes) == 0 {
 			m.selectedFile = -1
 		} else if m.selectedFile >= len(m.changes) {
@@ -634,6 +636,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.commits = msg.commits
 		m.graphCells, m.laneOpen = buildLanes(msg.commits, nil)
 		m.selectedCommit = 0
+		m.commitScroll = 0
 		m.commitsExhausted = len(msg.commits) < 200
 	}
 	return m, nil
@@ -913,6 +916,16 @@ func sanitizeTabs(s string) string {
 	return strings.ReplaceAll(s, "\t", "    ")
 }
 
+// sanitizeCommitText makes raw commit text (message, author) safe for
+// lipgloss width math and rendering: invalid UTF-8 bytes (e.g. legacy
+// GBK leftovers) become U+FFFD so width calculations never see broken
+// sequences, then tabs are collapsed exactly like sanitizeTabs. Valid
+// UTF-8 — Chinese, full-width punctuation, emoji — passes through
+// byte-for-byte unchanged.
+func sanitizeCommitText(s string) string {
+	return sanitizeTabs(strings.ToValidUTF8(s, "\uFFFD"))
+}
+
 // statusStyle returns the lipgloss style for a given status byte.
 func statusStyle(status byte) lipgloss.Style {
 	switch status {
@@ -960,14 +973,23 @@ func (m *model) renderBottomSized(visibleRows int) string {
 
 	start := 0
 	if selectedIdx >= 0 && len(m.commits) > visibleRows && visibleRows > 0 {
-		start = selectedIdx - visibleRows + 1
-		if start < 0 {
-			start = 0
+		if selectedIdx < m.commitScroll {
+			m.commitScroll = selectedIdx
 		}
-		maxStart := len(m.commits) - visibleRows
-		if start > maxStart {
-			start = maxStart
+		if selectedIdx > m.commitScroll+visibleRows-1 {
+			m.commitScroll = selectedIdx - visibleRows + 1
 		}
+		start = m.commitScroll
+	}
+	maxStart := len(m.commits) - visibleRows
+	if maxStart < 0 {
+		maxStart = 0
+	}
+	if m.commitScroll > maxStart {
+		m.commitScroll = maxStart
+	}
+	if m.commitScroll < 0 {
+		m.commitScroll = 0
 	}
 
 	end := len(m.commits)
@@ -1087,19 +1109,20 @@ func renderCommitLineStyled(commit git.CommitRow, cells string, width int, selec
 	}
 	hash := hashStyle.Render(commit.Hash)
 	styledRefs := commitRefsStyle.Render(commit.Refs)
+	msg := sanitizeCommitText(commit.Msg)
 	var author string
 	if commit.Author != "" {
-		author = authorStyle.Render("  " + commit.Author)
+		author = authorStyle.Render("  " + sanitizeCommitText(commit.Author))
 	}
 
 	if commit.Refs == "" {
-		return fmt.Sprintf("%s %s %s%s", cells, hash, commit.Msg, author)
+		return fmt.Sprintf("%s %s %s%s", cells, hash, msg, author)
 	}
 
-	left := fmt.Sprintf("%s %s %s", cells, hash, commit.Msg) + author
+	left := fmt.Sprintf("%s %s %s", cells, hash, msg) + author
 	gap := width - lipgloss.Width(left) - lipgloss.Width(styledRefs)
 	if gap >= 1 {
 		return left + strings.Repeat(" ", gap) + styledRefs
 	}
-	return fmt.Sprintf("%s %s %s %s%s", cells, hash, styledRefs, commit.Msg, author)
+	return fmt.Sprintf("%s %s %s %s%s", cells, hash, styledRefs, msg, author)
 }
