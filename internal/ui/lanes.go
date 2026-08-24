@@ -163,7 +163,14 @@ func buildLaneRow(row git.CommitRow, lanes [][]string) (string, [][]string) {
 		}
 		for c := lo + 1; c < hi; c++ {
 			if !curveCols[c] {
-				grid[c] = graphPalette[col%len(graphPalette)].Render("─")
+				if len(lanes[c]) > 0 {
+					// The bridge crosses a live lane: keep its vertical │
+					// and the horizontal bridge as a crossing ┼, so the
+					// reader doesn't follow the bridge into that branch.
+					grid[c] = graphPalette[col%len(graphPalette)].Render("┼")
+				} else {
+					grid[c] = graphPalette[col%len(graphPalette)].Render("─")
+				}
 			}
 		}
 		grid[col] = glyph

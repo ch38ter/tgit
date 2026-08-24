@@ -31,11 +31,25 @@ func dotCol(t *testing.T, cell string) int {
 }
 
 const (
-	hX  = "1111111111111111111111111111111111111111" // merge commit X
-	hM1 = "2222222222222222222222222222222222222222" // main commit M1
-	hF2 = "3333333333333333333333333333333333333333" // feature tip F2
-	hF1 = "4444444444444444444444444444444444444444" // feature base F1
-	hB  = "5555555555555555555555555555555555555555" // fork/root commit B
+	hX   = "1111111111111111111111111111111111111111" // merge commit X
+	hM1  = "2222222222222222222222222222222222222222" // main commit M1
+	hF2  = "3333333333333333333333333333333333333333" // feature tip F2
+	hF1  = "4444444444444444444444444444444444444444" // feature base F1
+	hB   = "5555555555555555555555555555555555555555" // fork/root commit B
+	hM2  = "6666666666666666666666666666666666666666" // second main commit M2
+	hG1  = "7777777777777777777777777777777777777777" // side branch G1
+	hG2  = "8888888888888888888888888888888888888888" // side branch G2
+	hG3  = "9999999999999999999999999999999999999999" // side branch G3
+	hG4  = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" // side branch G4
+	hG1a = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" // G1's child
+	hG2a = "cccccccccccccccccccccccccccccccccccccccc" // G2's child
+	hG3a = "dddddddddddddddddddddddddddddddddddddddd" // G3's child
+	hG4a = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" // G4's child
+	hG   = "ffffffffffffffffffffffffffffffffffffffff" // side branch tip G (parent of G1)
+	hA   = "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0" // first-parent branch A
+	hF1a = "b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0" // F1's child
+	hF2a = "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0" // F2's child
+	hR   = "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0" // shared root R
 )
 
 func TestBuildLanesLinear(t *testing.T) {
@@ -250,5 +264,149 @@ func TestBuildLanesDotStyling(t *testing.T) {
 	}
 	if !strings.Contains(cells[1], graphDotStyles[1].Render("●")) {
 		t.Errorf("lane 1 dot must render with graphDotStyles[1], got %q", cells[1])
+	}
+}
+
+// Regression: a merge bridge '─' crossing an occupied lane used to erase that
+// lane's vertical '│', so the reader followed the bridge down into the wrong
+// branch. The bridge must render '┼' (vertical + horizontal) over occupied
+// lanes, keeping the crossed branch continuous.
+func TestBridgePreservesCrossedLanes(t *testing.T) {
+	forceANSI256(t)
+
+	// Variant A: three occupied lanes (G1/G2/G3) sit between the merge dot on
+	// lane 0 and its second parent F2 on lane 4.
+	rowsA := []git.CommitRow{
+		laneFixture("merge X", hX, hM2, hG1, hG2, hG3, hF2),
+		laneFixture("G1", hG1, hG1a),
+		laneFixture("G2", hG2, hG2a),
+		laneFixture("G3", hG3, hG3a),
+		laneFixture("merge M2", hM2, hB, hF2),
+	}
+	cellsA, _ := buildLanes(rowsA, nil)
+	if got := stripANSI(cellsA[4]); got != "◉┼┼┼╮" {
+		t.Errorf("variant A merge row must bridge across occupied lanes as ◉┼┼┼╮, got %q", got)
+	}
+	if !strings.Contains(cellsA[4], graphDotStyles[0].Render("◉")) {
+		t.Errorf("variant A merge dot must render with graphDotStyles[0] ◉, got %q", cellsA[4])
+	}
+
+	// Variant B: four occupied lanes (G1/G2/G3/G4) between the dot and F2 on
+	// lane 5.
+	rowsB := []git.CommitRow{
+		laneFixture("merge X", hX, hM2, hG1, hG2, hG3, hG4, hF2),
+		laneFixture("G1", hG1, hG1a),
+		laneFixture("G2", hG2, hG2a),
+		laneFixture("G3", hG3, hG3a),
+		laneFixture("G4", hG4, hG4a),
+		laneFixture("merge M2", hM2, hB, hF2),
+	}
+	cellsB, _ := buildLanes(rowsB, nil)
+	if got := stripANSI(cellsB[5]); got != "◉┼┼┼┼╮" {
+		t.Errorf("variant B merge row must bridge across occupied lanes as ◉┼┼┼┼╮, got %q", got)
+	}
+	if !strings.Contains(cellsB[5], graphDotStyles[0].Render("◉")) {
+		t.Errorf("variant B merge dot must render with graphDotStyles[0] ◉, got %q", cellsB[5])
+	}
+}
+
+// Mixed regression (a): a bridge from a merge dot crosses a still-live lane
+// (G's lane 1 sits between the dot on lane 0 and second parent F2 on lane 2),
+// while the octopus fanout row above keeps its pure-curve ◉╮╮ semantics.
+func TestMixedMergeBridgeCrossesOccupiedLane(t *testing.T) {
+	forceANSI256(t)
+
+	rows := []git.CommitRow{
+		laneFixture("merge X", hX, hM2, hG, hF2),
+		laneFixture("G", hG, hG1),
+		laneFixture("G1", hG1, hG1a),
+		laneFixture("merge M2", hM2, hB, hF2),
+		laneFixture("B", hB, hR),
+		laneFixture("F2", hF2, hF2a),
+		laneFixture("F2a", hF2a, hR),
+		laneFixture("root R", hR),
+	}
+
+	cells, _ := buildLanes(rows, nil)
+
+	// X creates lanes [M2][G][F2] (lane0-2): the extras sit adjacent to the
+	// dot, so the fanout must stay ◉╮╮ — no bridge may degrade them.
+	if got := stripANSI(cells[0]); got != "◉╮╮" {
+		t.Errorf("X row must fan out as ◉╮╮, got %q", got)
+	}
+	if !strings.Contains(cells[0], graphDotStyles[0].Render("◉")) {
+		t.Errorf("X merge dot must render with graphDotStyles[0] ◉, got %q", cells[0])
+	}
+
+	// M2 falls back to lane 0 (laneIndexOf hit); its second parent F2 sits on
+	// lane 2, so the bridge 0→2 crosses G's occupied lane 1: ┼, not ─.
+	if got := stripANSI(cells[3]); got != "◉┼╮" {
+		t.Errorf("M2 merge row must bridge across the occupied lane as ◉┼╮, got %q", got)
+	}
+	if !strings.Contains(cells[3], graphDotStyles[0].Render("◉")) {
+		t.Errorf("M2 merge dot must render with graphDotStyles[0] ◉, got %q", cells[3])
+	}
+	if !strings.Contains(cells[3], graphPalette[2].Render("┼")) {
+		t.Errorf("crossing glyph must render with palette[2] ┼, got %q", cells[3])
+	}
+}
+
+// Mixed regression (b): a merge whose second parent already occupies a lane to
+// the LEFT of the merge dot — the connection enters from the left (╭), the
+// merge dot stays ◉. M2 must follow X immediately: once lane 0's head moves
+// off F2, the left-hand lane is unreachable.
+func TestMixedMergeSecondParentOnLeft(t *testing.T) {
+	forceANSI256(t)
+
+	rows := []git.CommitRow{
+		laneFixture("merge X", hX, hF2, hM2),
+		laneFixture("merge M2", hM2, hB, hF2),
+		laneFixture("B", hB, hR),
+		laneFixture("F2", hF2, hR),
+		laneFixture("root R", hR),
+	}
+
+	cells, _ := buildLanes(rows, nil)
+
+	// X creates lanes [F2][M2] (lane0-1): F2's extra lane is adjacent, so the
+	// fanout stays ◉╮.
+	if got := stripANSI(cells[0]); got != "◉╮" {
+		t.Errorf("X row must fan out as ◉╮, got %q", got)
+	}
+
+	// M2 lands on lane 1 while lane 0 still expects F2 (m=0 < L=1): the
+	// second-parent connection enters the dot from the left.
+	if got := stripANSI(cells[1]); got != "╭◉" {
+		t.Errorf("M2 row must connect from the left as ╭◉, got %q", got)
+	}
+	if !strings.Contains(cells[1], graphDotStyles[1].Render("◉")) {
+		t.Errorf("M2 merge dot must render with graphDotStyles[1] ◉, got %q", cells[1])
+	}
+}
+
+// Mixed regression (c): a fresh octopus merge landing on a new lane 0 — the
+// extra parents sit on adjacent lanes 1/2 with no occupied column between, so
+// the fanout must stay pure curves ◉╮╮ (the middle column is curveCols-
+// protected, not bridge-overwritten).
+func TestMixedOctopusFanoutOnNewLane(t *testing.T) {
+	forceANSI256(t)
+
+	rows := []git.CommitRow{
+		laneFixture("merge X", hX, hA, hF1, hF2),
+		laneFixture("A", hA, hR),
+		laneFixture("F1", hF1, hF1a),
+		laneFixture("F1a", hF1a, hR),
+		laneFixture("F2", hF2, hF2a),
+		laneFixture("F2a", hF2a, hR),
+		laneFixture("root R", hR),
+	}
+
+	cells, _ := buildLanes(rows, nil)
+
+	if got := stripANSI(cells[0]); got != "◉╮╮" {
+		t.Errorf("X row must fan out as ◉╮╮, got %q", got)
+	}
+	if !strings.Contains(cells[0], graphDotStyles[0].Render("◉")) {
+		t.Errorf("X merge dot must render with graphDotStyles[0] ◉, got %q", cells[0])
 	}
 }
