@@ -15,10 +15,22 @@ import (
 	"github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/fsnotify/fsnotify"
+	"github.com/mattn/go-runewidth"
 	"github.com/muesli/reflow/ansi"
 	"github.com/muesli/reflow/truncate"
 	"tgit/internal/git"
 )
+
+// init forces runewidth's East Asian width handling off so ambiguous-width
+// characters (● │ ╮ ─ · …) count as one cell, matching how the terminal
+// renders them (glibc wcwidth is locale-independent). lipgloss.Width inherits
+// runewidth's locale-dependent default: under a CJK locale (zh_CN.UTF-8) it
+// counts ambiguous characters as two cells, so the refs gap in
+// renderCommitLineStyled came out one cell short per ambiguous graph char and
+// refs drifted left of the right edge. CJK text (W/F width) is unaffected.
+func init() {
+	runewidth.DefaultCondition.EastAsianWidth = false
+}
 
 const headerHeight = 3
 
