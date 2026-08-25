@@ -1,5 +1,7 @@
 # tgit
 
+中文 | [English](README.en.md)
+
 > 终端里的三栏 Git 查看器：工作区状态、commit diff、彩色提交图一屏尽览，纯只读，不动你的工作区。
 
 ![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go&logoColor=white)
