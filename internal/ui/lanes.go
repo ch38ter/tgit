@@ -173,7 +173,7 @@ func buildLaneRow(row git.CommitRow, lanes [][]string) (string, [][]string) {
 				}
 			}
 		}
-		grid[col] = glyph
+		grid[col] = graphPalette[col%len(graphPalette)].Render(glyph)
 		curveCols[col] = true
 	}
 	for _, p := range extras {
