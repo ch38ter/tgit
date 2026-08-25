@@ -6,6 +6,7 @@
 
 ![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-lightgrey)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ## ✨ 项目亮点
 
@@ -101,4 +102,4 @@ make clean     # 清理构建产物
 
 ## 📝 License
 
-暂未指定。
+[MIT](LICENSE) —— 可自由使用、复制、修改、分发（含商用），只需保留版权声明。

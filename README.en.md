@@ -6,6 +6,7 @@
 
 ![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-lightgrey)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ## ✨ Highlights
 
@@ -101,4 +102,4 @@ Issues and PRs welcome. If you touch parsing logic, add tests first — `interna
 
 ## 📝 License
 
-Not yet specified.
+[MIT](LICENSE) — free to use, copy, modify, and distribute (commercial use included), as long as the copyright notice is preserved.
