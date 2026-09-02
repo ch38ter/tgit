@@ -9,7 +9,7 @@ import (
 // the combined output (patch + stat).  The commit is passed as a single
 // argv element, so hashes/refnames with special characters are safe.
 func ShowCommit(commit string) (string, error) {
-	out, err := RunGit("show", "--format=fuller", "--stat", "-p", commit)
+	out, err := RunGit("-c", "core.quotePath=false", "show", "--format=fuller", "--stat", "-p", commit)
 	if err != nil {
 		return "", fmt.Errorf("git show %s: %w", commit, err)
 	}
@@ -26,7 +26,7 @@ func ShowCommit(commit string) (string, error) {
 // The path is passed as a single argv element, so paths with spaces are safe.
 func FileDiff(path string) (string, error) {
 	// 1. Working-tree diff
-	out, err := RunGit("diff", "--", path)
+	out, err := RunGit("-c", "core.quotePath=false", "diff", "--", path)
 	if err != nil {
 		return "", err
 	}
@@ -35,7 +35,7 @@ func FileDiff(path string) (string, error) {
 	}
 
 	// 2. Staged diff
-	out, err = RunGit("diff", "--cached", "--", path)
+	out, err = RunGit("-c", "core.quotePath=false", "diff", "--cached", "--", path)
 	if err != nil {
 		return "", err
 	}

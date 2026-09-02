@@ -185,3 +185,79 @@ func TestGetRepoInfo(t *testing.T) {
 		t.Errorf("UserName = %q, want %q", info.UserName, "Test User")
 	}
 }
+
+func TestShowCommit_UnicodeOutput(t *testing.T) {
+	dir := setupTestRepo(t)
+
+	// Use both a non-ASCII path and content: core.quotePath must not turn
+	// either the displayed path into octal escapes or hide the readable text.
+	name := "中文.txt"
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("第一行\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := runGitCmd(dir, "add", name); err != nil {
+		t.Fatalf("git add: %v", err)
+	}
+	if err := runGitCmd(dir, "commit", "-m", "添加中文文件"); err != nil {
+		t.Fatalf("git commit: %v", err)
+	}
+
+	cmd := exec.Command("git", "rev-parse", "HEAD")
+	cmd.Dir = dir
+	hash, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("rev-parse: %v", err)
+	}
+
+	origDir, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer os.Chdir(origDir)
+
+	out, err := ShowCommit(strings.TrimSpace(string(hash)))
+	if err != nil {
+		t.Fatalf("ShowCommit returned error: %v", err)
+	}
+	for _, want := range []string{name, "第一行", "添加中文文件"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("ShowCommit output missing %q; got:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, `\\`) {
+		t.Errorf("ShowCommit output contains escaped path/content: %q", out)
+	}
+}
+
+func TestFileDiff_UnicodeOutput(t *testing.T) {
+	dir := setupTestRepo(t)
+	name := "中文.txt"
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("旧内容\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := runGitCmd(dir, "add", name); err != nil {
+		t.Fatalf("git add: %v", err)
+	}
+	if err := runGitCmd(dir, "commit", "-m", "添加中文文件"); err != nil {
+		t.Fatalf("git commit: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("新内容\n"), 0o644); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+
+	origDir, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer os.Chdir(origDir)
+
+	out, err := FileDiff(name)
+	if err != nil {
+		t.Fatalf("FileDiff returned error: %v", err)
+	}
+	for _, want := range []string{name, "旧内容", "新内容"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("FileDiff output missing %q; got:\n%s", want, out)
+		}
+	}
+}
